@@ -1,0 +1,75 @@
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const efi_optimize = b.standardOptimizeOption(.{});
+    const efi_target = b.resolveTargetQuery(.{
+        .os_tag = .uefi,
+        .cpu_arch = .x86_64,
+        .abi = .msvc,
+        .ofmt = .coff,
+    });
+    const efi_module = b.addModule("efi_module", .{
+        .code_model = .default,
+        .root_source_file = b.path("src/boot/main.zig"),
+        .target = efi_target,
+        .optimize = efi_optimize,
+    });
+    const efi_exe = b.addExecutable(.{
+        .name = "bootx64.efi",
+        .root_module = efi_module,
+        .linkage = .static,
+    });
+
+    const kernel_optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .Debug });
+    const kernel_target = b.resolveTargetQuery(.{ .os_tag = .freestanding, .ofmt = .elf, .cpu_arch = .x86_64 });
+    const kernel_module = b.addModule("kernel_module", .{
+        .code_model = .kernel,
+        .root_source_file = b.path("src/kernel/main.zig"),
+        .optimize = kernel_optimize,
+        .target = kernel_target,
+        .pic = false,
+        .red_zone = false,
+        .stack_check = false,
+        .stack_protector = false,
+        .omit_frame_pointer = true,
+    });
+    const kernel_exe = b.addExecutable(.{ .name = "ZincOS", .root_module = kernel_module });
+
+    kernel_exe.setLinkerScript(b.path("src/kernel/linker.ld"));
+    const out_dir_name = "img";
+    const install_efi = b.addInstallFile(
+        efi_exe.getEmittedBin(),
+        b.fmt("{s}/efi/boot/{s}", .{ out_dir_name, efi_exe.name }),
+    );
+
+    install_efi.step.dependOn(&efi_exe.step);
+    b.getInstallStep().dependOn(&install_efi.step);
+
+    const install_kernel = b.addInstallFile(kernel_exe.getEmittedBin(), b.fmt("{s}/efi/{s}", .{ out_dir_name, kernel_exe.name }));
+
+    install_kernel.step.dependOn(&kernel_exe.step);
+    b.getInstallStep().dependOn(&install_kernel.step);
+
+    const qemu_args = [_][]const u8{
+        "qemu-system-x86_64",
+        "-m",
+        "1G",
+        "-bios",
+        "/usr/share/ovmf/x64/OVMF.4m.fd",
+        "-drive",
+        b.fmt("file=fat:rw:{s}/{s},format=raw", .{ b.install_path, out_dir_name }),
+        "-nographic",
+        "-serial",
+        "mon:stdio",
+        "-no-reboot",
+        "-enable-kvm",
+        "-cpu",
+        "host",
+        "-s",
+    };
+    const qemu_cmd = b.addSystemCommand(&qemu_args);
+    qemu_cmd.step.dependOn(b.getInstallStep());
+
+    const run_qemu_cmd = b.step("run", "Run QMEU");
+    run_qemu_cmd.dependOn(&qemu_cmd.step);
+}
