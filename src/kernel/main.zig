@@ -5,7 +5,14 @@
 //   zig build-exe src/kernel.zig -target x86_64-freestanding-none \
 //     -fno-red-zone --script linker.ld -O ReleaseSafe
 
-const std = @import("std");
+const arch = @import("arch");
+const gdt = arch.gdt;
+const idt = arch.idt;
+const apic = arch.apic;
+const syscall = arch.syscall;
+const serial = arch.serial;
+const builtin = @import("std").builtin;
+
 // ============================================================================
 // Boot Info Structure - must match bootloader's definition exactly
 // ============================================================================
@@ -124,7 +131,7 @@ fn draw_char(x: u32, y: u32, c: u8, r: u8, g: u8, b: u8) void {
     for (0..8) |row| {
         const bits = glyph[row];
         for (0..8) |col| {
-            if ((bits >> @intCast(7 - col)) & 1 == 1) {
+            if ((bits >> @intCast(col)) & 1 == 1) {
                 put_pixel(x + @as(u32, @intCast(col)), y + @as(u32, @intCast(row)), r, g, b);
             }
         }
@@ -144,101 +151,88 @@ fn draw_string(x: u32, y: u32, str: []const u8, r: u8, g: u8, b: u8) void {
 }
 
 // ============================================================================
-// Serial Output (COM1) - for debugging
+// Minimal formatting helpers (no std.fmt)
 // ============================================================================
 
-const COM1: u16 = 0x3F8;
-
-pub inline fn outb(port: u16, value: u8) void {
-    return asm volatile (
-        \\ outb %[value], %[port]
-        :
-        : [port] "{dx}" (port),
-          [value] "{al}" (value),
-    );
-}
-
-pub inline fn inb(port: u16) u8 {
-    return asm volatile (
-        \\ inb %[port], %[value]
-        : [value] "={al}" (-> u8),
-        : [port] "{dx}" (port),
-    );
-}
-fn init_serial() void {
-    outb(COM1 + 1, 0x00); // Disable interrupts
-    outb(COM1 + 3, 0x80); // Enable DLAB
-    outb(COM1 + 0, 0x03); // Baud rate divisor lo (38400)
-    outb(COM1 + 1, 0x00); // Baud rate divisor hi
-    outb(COM1 + 3, 0x03); // 8 bits, no parity, one stop bit
-    outb(COM1 + 2, 0xC7); // Enable FIFO
-    outb(COM1 + 4, 0x0B); // IRQs enabled, RTS/DSR set
-}
-
-fn serial_write(c: u8) void {
-    while (inb(COM1 + 5) & 0x20 == 0) {}
-    outb(COM1, c);
-}
-
-fn serial_print(str: []const u8) void {
-    for (str) |c| {
-        serial_write(c);
-        if (c == '\n') serial_write('\r');
-    }
-}
-
-fn serial_hex(value: u64) void {
+fn format_hex(buf: []u8, value: u64) []const u8 {
     const hex = "0123456789ABCDEF";
-    serial_print("0x");
+    if (buf.len < 2) return buf[0..0];
+
+    buf[0] = '0';
+    buf[1] = 'x';
+
+    var idx: usize = 2;
     const v = value;
     var started = false;
     var i: u6 = 60;
     while (true) {
         const nibble: u4 = @truncate(v >> i);
         if (nibble != 0 or started or i == 0) {
-            serial_write(hex[nibble]);
+            if (idx >= buf.len) break;
+            buf[idx] = hex[nibble];
+            idx += 1;
             started = true;
         }
         if (i == 0) break;
         i -= 4;
     }
+    return buf[0..idx];
+}
+
+fn format_framebuffer_line(buf: []u8, value: u64) []const u8 {
+    const prefix = "Framebuffer address: ";
+    var idx: usize = 0;
+    while (idx < prefix.len and idx < buf.len) : (idx += 1) {
+        buf[idx] = prefix[idx];
+    }
+    if (idx >= buf.len) return buf[0..idx];
+
+    const hex_slice = format_hex(buf[idx..], value);
+    return buf[0 .. idx + hex_slice.len];
 }
 
 // ============================================================================
 // Kernel Entry Point
 // ============================================================================
 
-export fn _start(boot_info: *BootInfo) callconv(.c) noreturn {
+export fn _start(boot_info: *BootInfo) callconv(.{ .x86_64_sysv = .{} }) noreturn {
     // Initialize serial for debug output
-    init_serial();
-    serial_print("\n\n=== Kernel Started ===\n");
+    serial.init();
+
+    serial.write("\n\n=== Kernel Started ===\n");
+    gdt.init();
+    apic.init();
+    idt.init();
+    syscall.init();
+    asm volatile ("sti");
+    serial.write("Interrupts and syscalls initialized!\n");
 
     // Validate boot info magic
     if (boot_info.magic != BOOT_MAGIC) {
-        serial_print("ERROR: Invalid boot magic!\n");
+        serial.write("ERROR: Invalid boot magic!\n");
         halt();
     }
 
-    serial_print("Boot magic validated\n");
+    serial.write("Boot magic validated\n");
 
     // Print boot info
-    serial_print("Framebuffer: ");
-    serial_hex(boot_info.framebuffer.base_address);
-    serial_print("\n");
+    serial.write("Framebuffer: ");
+    serial.writeHex(boot_info.framebuffer.base_address);
+    serial.write("\n");
 
-    serial_print("Resolution: ");
-    serial_hex(boot_info.framebuffer.width);
-    serial_print("x");
-    serial_hex(boot_info.framebuffer.height);
-    serial_print("\n");
+    serial.write("Resolution: ");
+    serial.writeHex(@intCast(boot_info.framebuffer.width));
+    serial.write("x");
+    serial.writeHex(@intCast(boot_info.framebuffer.height));
+    serial.write("\n");
 
-    serial_print("Memory regions: ");
-    serial_hex(boot_info.memory_map_entries);
-    serial_print("\n");
+    serial.write("Memory regions: ");
+    serial.writeHex(boot_info.memory_map_entries);
+    serial.write("\n");
 
-    serial_print("RSDP: ");
-    serial_hex(boot_info.rsdp_address);
-    serial_print("\n");
+    serial.write("RSDP: ");
+    serial.writeHex(boot_info.rsdp_address);
+    serial.write("\n");
 
     // Initialize framebuffer
     init_framebuffer(&boot_info.framebuffer);
@@ -259,6 +253,9 @@ export fn _start(boot_info: *BootInfo) callconv(.c) noreturn {
     // Draw text
     draw_string(16, 10, "Zig Kernel v0.1 - Booted successfully!", 0xFF, 0xFF, 0xFF);
     draw_string(16, 50, "Boot info received from bootloader:", 0xC0, 0xC0, 0xC0);
+    var buf: [256]u8 = undefined;
+    const line = format_framebuffer_line(buf[0..], boot_info.framebuffer.base_address);
+    draw_string(16, 90, line, 0xc0, 0xc0, 0xc0);
 
     // Draw some colored boxes as a test pattern
     const y: u32 = 100;
@@ -271,7 +268,7 @@ export fn _start(boot_info: *BootInfo) callconv(.c) noreturn {
     fill_rect(256, y, 100, 40, 0x00, 0x00, 0xFF);
     draw_string(260, y + 16, "BLUE", 0xFF, 0xFF, 0xFF);
 
-    serial_print("\nKernel initialization complete. Halting.\n");
+    serial.write("\nKernel initialization complete. Halting.\n");
 
     halt();
 }
@@ -284,9 +281,9 @@ fn halt() noreturn {
 }
 
 // Panic handler for Zig runtime
-pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
-    serial_print("KERNEL PANIC: ");
-    serial_print(msg);
-    serial_print("\n");
+pub fn panic(msg: []const u8, _: ?*builtin.StackTrace, _: ?usize) noreturn {
+    serial.write("KERNEL PANIC: ");
+    serial.write(msg);
+    serial.write("\n");
     halt();
 }

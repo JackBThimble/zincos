@@ -14,6 +14,13 @@ pub const LoadError = error{
     NotExecutable,
     OutOfMemory,
     NoLoadableSegments,
+    TooManySegments,
+};
+
+pub const LoadedSegment = struct {
+    vaddr: u64,
+    paddr: u64,
+    memsz: u64,
 };
 
 pub const LoadResult = struct {
@@ -21,7 +28,11 @@ pub const LoadResult = struct {
     physical_base: u64,
     virtual_base: u64,
     size: u64,
+    segments: []const LoadedSegment,
 };
+
+const MAX_SEGMENTS: usize = 16;
+var loaded_segments: [MAX_SEGMENTS]LoadedSegment = undefined;
 
 // =============================================================================
 // ELF Loading
@@ -67,6 +78,7 @@ pub fn load(boot_services: *BootServices, elf_data: []const u8) LoadError!LoadRe
 
     var load_base: u64 = std.math.maxInt(u64);
     var load_end: u64 = 0;
+    var virt_base: u64 = std.math.maxInt(u64);
     var segments_loaded: usize = 0;
 
     var i: u16 = 0;
@@ -88,23 +100,25 @@ pub fn load(boot_services: *BootServices, elf_data: []const u8) LoadError!LoadRe
             phdr.memsz,
         });
 
+        if (segments_loaded >= MAX_SEGMENTS) {
+            console.println("[!] Too many loadable segments");
+            return LoadError.TooManySegments;
+        }
+
+        const mem_type: uefi.tables.MemoryType = if (phdr.flags.X)
+            .loader_code
+        else
+            .loader_data;
+
         const page_count = (phdr.memsz + 0xfff) / 0x1000;
 
         const segment_pages = boot_services.allocatePages(
-            .{ .address = @ptrFromInt(phdr.paddr) },
-            .loader_data,
+            .any,
+            mem_type,
             @intCast(page_count),
-        ) catch blk: {
-            console.println("[!] Failed at specific address, trying any...");
-
-            break :blk boot_services.allocatePages(
-                .any,
-                .loader_data,
-                @intCast(page_count),
-            ) catch {
-                console.println("[!] Failed to allocate pages");
-                return LoadError.OutOfMemory;
-            };
+        ) catch {
+            console.println("[!] Failed to allocate pages");
+            return LoadError.OutOfMemory;
         };
 
         const segment_base: u64 = @intFromPtr(segment_pages.ptr);
@@ -120,6 +134,12 @@ pub fn load(boot_services: *BootServices, elf_data: []const u8) LoadError!LoadRe
 
         if (segment_base < load_base) load_base = segment_base;
         if (segment_base + phdr.memsz > load_end) load_end = segment_base + phdr.memsz;
+        if (phdr.vaddr < virt_base) virt_base = phdr.vaddr;
+        loaded_segments[segments_loaded] = .{
+            .vaddr = phdr.vaddr,
+            .paddr = segment_base,
+            .memsz = phdr.memsz,
+        };
         segments_loaded += 1;
     }
 
@@ -136,7 +156,8 @@ pub fn load(boot_services: *BootServices, elf_data: []const u8) LoadError!LoadRe
     return LoadResult{
         .entry_point = header.entry,
         .physical_base = load_base,
-        .virtual_base = header.entry & 0xffff_ffff_ffff_f000,
+        .virtual_base = virt_base,
         .size = load_end - load_base,
+        .segments = loaded_segments[0..segments_loaded],
     };
 }

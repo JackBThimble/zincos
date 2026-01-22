@@ -20,6 +20,14 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
     });
 
+    const arch_module = b.createModule(.{
+        .root_source_file = b.path("src/arch/x86_64/main.zig"),
+        .target = b.resolveTargetQuery(.{
+            .cpu_arch = .x86_64,
+            .os_tag = .freestanding,
+        }),
+    });
+
     const kernel_optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .Debug });
     const kernel_target = b.resolveTargetQuery(.{ .os_tag = .freestanding, .ofmt = .elf, .cpu_arch = .x86_64 });
     const kernel_module = b.addModule("kernel_module", .{
@@ -33,6 +41,12 @@ pub fn build(b: *std.Build) void {
         .stack_protector = false,
         .omit_frame_pointer = true,
     });
+    kernel_module.addImport("arch", arch_module);
+    const isr_asm = b.addSystemCommand(&.{ "nasm", "-f", "elf64" });
+    isr_asm.addArg("-o");
+    const isr_obj = isr_asm.addOutputFileArg("isr.o");
+    isr_asm.addFileArg(b.path("src/arch/x86_64/interrupts/isr.asm"));
+    kernel_module.addObjectFile(isr_obj);
     const kernel_exe = b.addExecutable(.{ .name = "ZincOS", .root_module = kernel_module });
 
     kernel_exe.setLinkerScript(b.path("src/kernel/linker.ld"));
@@ -58,7 +72,6 @@ pub fn build(b: *std.Build) void {
         "/usr/share/ovmf/x64/OVMF.4m.fd",
         "-drive",
         b.fmt("file=fat:rw:{s}/{s},format=raw", .{ b.install_path, out_dir_name }),
-        "-nographic",
         "-serial",
         "mon:stdio",
         "-no-reboot",
