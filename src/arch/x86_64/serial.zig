@@ -1,3 +1,4 @@
+pub const std = @import("std");
 pub const COM1: u16 = 0x3F8;
 
 pub inline fn outb(port: u16, value: u8) void {
@@ -31,28 +32,48 @@ pub fn init() void {
     outb(COM1 + 4, 0x0B); // IRQs enabled, RTS/DSR set
 }
 
-pub fn writeByte(c: u8) void {
+pub fn putChar(c: u8) void {
     while (inb(COM1 + 5) & 0x20 == 0) {}
     outb(COM1, c);
 }
 
-pub fn write(buf: []const u8) void {
+pub fn print(buf: []const u8) void {
     for (buf) |c| {
-        writeByte(c);
-        if (c == '\n') writeByte('\r');
+        putChar(c);
+        if (c == '\n') putChar('\r');
     }
+}
+
+pub fn println(buf: []const u8) void {
+    print(buf);
+    print("\n");
+}
+
+pub fn printf(comptime fmt: []const u8, args: anytype) void {
+    var buffer: [256]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buffer, fmt, args) catch {
+        print("[fmt error]\n");
+        return;
+    };
+
+    print(msg);
+}
+
+pub fn printfln(comptime fmt: []const u8, args: anytype) void {
+    printf(fmt, args);
+    putChar('\n');
 }
 
 pub fn writeHex(value: u64) void {
     const hex = "0123456789ABCDEF";
-    write("0x");
+    print("0x");
     const v = value;
     var started = false;
     var i: u6 = 60;
     while (true) {
         const nibble: u4 = @truncate(v >> i);
         if (nibble != 0 or started or i == 0) {
-            writeByte(hex[nibble]);
+            putChar(hex[nibble]);
             started = true;
         }
         if (i == 0) break;
@@ -63,7 +84,7 @@ pub fn writeHex(value: u64) void {
 pub fn writeDec(value: u64) void {
     var v = value;
     if (v == 0) {
-        writeByte('0');
+        putChar('0');
         return;
     }
 
@@ -73,5 +94,5 @@ pub fn writeDec(value: u64) void {
         i -= 1;
         buf[i] = @as(u8, '0' + @as(u8, @truncate(v % 10)));
     }
-    write(buf[i..]);
+    print(buf[i..]);
 }

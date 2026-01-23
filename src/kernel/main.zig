@@ -65,6 +65,7 @@ pub const BootInfo = extern struct {
     kernel_virtual_base: u64,
     kernel_size: u64,
     rsdp_address: u64,
+    hhdm_base: u64,
 };
 
 const BOOT_MAGIC: u64 = 0xB007_1AF0_DEAD_BEEF;
@@ -78,9 +79,11 @@ var fb_width: u32 = 0;
 var fb_height: u32 = 0;
 var fb_pitch: u32 = 0;
 var fb_bgr: bool = false;
+var hhdm_base: u64 = 0;
 
 fn init_framebuffer(info: *const FramebufferInfo) void {
-    fb = @ptrFromInt(info.base_address);
+    // Convert physical address to virtual via HHDM
+    fb = @ptrFromInt(info.base_address + hhdm_base);
     fb_width = info.width;
     fb_height = info.height;
     fb_pitch = info.pitch;
@@ -198,41 +201,42 @@ fn format_framebuffer_line(buf: []u8, value: u64) []const u8 {
 export fn _start(boot_info: *BootInfo) callconv(.{ .x86_64_sysv = .{} }) noreturn {
     // Initialize serial for debug output
     serial.init();
+    serial.println("\n\n=== Kernel Started ===");
 
-    serial.write("\n\n=== Kernel Started ===\n");
-    gdt.init();
-    apic.init();
     idt.init();
-    syscall.init();
-    asm volatile ("sti");
-    serial.write("Interrupts and syscalls initialized!\n");
-
     // Validate boot info magic
     if (boot_info.magic != BOOT_MAGIC) {
-        serial.write("ERROR: Invalid boot magic!\n");
+        serial.println("ERROR: Invalid boot magic!");
         halt();
     }
 
-    serial.write("Boot magic validated\n");
+    serial.println("Boot magic validated");
+
+    // Store HHDM base for physical-to-virtual conversions
+    hhdm_base = boot_info.hhdm_base;
+
+    serial.printfln("BOOT_MAGIC: 0x{x}", .{boot_info.magic});
+
+    serial.printfln("Kernel physical base: 0x{x}", .{
+        boot_info.kernel_physical_base,
+    });
+
+    serial.printfln("Kernel virtual base: 0x{x}", .{
+        boot_info.kernel_virtual_base,
+    });
+
+    serial.printfln("Kernel size: 0x{x}", .{
+        boot_info.kernel_size,
+    });
 
     // Print boot info
-    serial.write("Framebuffer: ");
-    serial.writeHex(boot_info.framebuffer.base_address);
-    serial.write("\n");
+    serial.printfln("Framebuffer: 0x{x}", .{boot_info.framebuffer.base_address});
 
-    serial.write("Resolution: ");
-    serial.writeHex(@intCast(boot_info.framebuffer.width));
-    serial.write("x");
-    serial.writeHex(@intCast(boot_info.framebuffer.height));
-    serial.write("\n");
+    serial.printfln("Resolution: {d}x{d}", .{ boot_info.framebuffer.width, boot_info.framebuffer.height });
 
-    serial.write("Memory regions: ");
-    serial.writeHex(boot_info.memory_map_entries);
-    serial.write("\n");
+    serial.printfln("Memory regions: {d}", .{boot_info.memory_map_entries});
 
-    serial.write("RSDP: ");
-    serial.writeHex(boot_info.rsdp_address);
-    serial.write("\n");
+    serial.printfln("RSDP: 0x{x}", .{boot_info.rsdp_address});
 
     // Initialize framebuffer
     init_framebuffer(&boot_info.framebuffer);
@@ -268,7 +272,7 @@ export fn _start(boot_info: *BootInfo) callconv(.{ .x86_64_sysv = .{} }) noretur
     fill_rect(256, y, 100, 40, 0x00, 0x00, 0xFF);
     draw_string(260, y + 16, "BLUE", 0xFF, 0xFF, 0xFF);
 
-    serial.write("\nKernel initialization complete. Halting.\n");
+    serial.println("\nKernel initialization complete. Halting.\n");
 
     halt();
 }
@@ -282,8 +286,6 @@ fn halt() noreturn {
 
 // Panic handler for Zig runtime
 pub fn panic(msg: []const u8, _: ?*builtin.StackTrace, _: ?usize) noreturn {
-    serial.write("KERNEL PANIC: ");
-    serial.write(msg);
-    serial.write("\n");
+    serial.printfln("KERNEL PANIC: {s}", .{msg});
     halt();
 }

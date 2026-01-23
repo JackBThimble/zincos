@@ -136,18 +136,14 @@ export fn syscall_handler(frame: *SyscallFrame) callconv(.c) u64 {
         2 => sys_read(@truncate(frame.rdi), frame.rsi, frame.rdx),
         // TODO: add syscalls
         else => blk: {
-            serial.write("Unknown syscall: ");
-            serial.writeDec(syscall_num);
-            serial.write("\n");
+            serial.printfln("Unknown syscall: {d}", .{syscall_num});
             break :blk @as(u64, @bitCast(@as(i64, -1))); // -ENOSYS
         },
     };
 }
 
 fn sys_exit(code: u64) u64 {
-    serial.write("Process exiting with code: ");
-    serial.writeDec(code);
-    serial.write("\n");
+    serial.printfln("Process exiting with code: {d}", .{code});
     while (true) asm volatile ("hlt");
 }
 
@@ -157,9 +153,7 @@ fn sys_write(fd: u32, buf: u64, count: u64) u64 {
         // TODO: validate buffer is in user space
         const data = @as([*]const u8, @ptrFromInt(buf))[0..count];
         // TODO: Write to console/serial
-        serial.write("WRITE: ");
-        serial.write(data);
-        serial.write("\n");
+        serial.printfln("WRITE: {}", .{data});
         return count;
     }
     return @as(u64, @bitCast(@as(i64, -1))); // - EBADF

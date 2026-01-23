@@ -53,4 +53,5 @@ pub const BootInfo = extern struct {
     kernel_virtual_base: u64,
     kernel_size: u64,
     rsdp_address: u64,
+    hhdm_base: u64, // Higher Half Direct Map base - add this to physical addresses
 };

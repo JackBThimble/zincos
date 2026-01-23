@@ -26,15 +26,6 @@ const L = std.unicode.utf8ToUtf16LeStringLiteral;
 const KERNEL_PATH = L("\\efi\\ZincOS");
 
 var boot_services: *BootServices = undefined;
-var kernel_boot_info: boot_info.BootInfo = .{
-    .framebuffer = undefined,
-    .memory_map_addr = 0,
-    .memory_map_entries = 0,
-    .kernel_physical_base = 0,
-    .kernel_virtual_base = 0,
-    .kernel_size = 0,
-    .rsdp_address = 0,
-};
 
 pub fn main() noreturn {
     const con_out = uefi.system_table.con_out orelse halt();
@@ -48,14 +39,15 @@ pub fn main() noreturn {
     console.println("=========================================");
     console.println("\r\n");
 
+    var framebuffer: FramebufferInfo = undefined;
     if (graphics.setup(boot_services)) |fb_info| {
-        kernel_boot_info.framebuffer = fb_info;
+        framebuffer = fb_info;
     } else |_| {
         console.println("[!] Graphics setup failed, continuing without framebuffer");
-        kernel_boot_info.framebuffer = std.mem.zeroes(boot_info.FramebufferInfo);
+        framebuffer = std.mem.zeroes(boot_info.FramebufferInfo);
     }
 
-    kernel_boot_info.rsdp_address = acpi.find_rsdp() orelse 0;
+    const rsdp_address = acpi.find_rsdp() orelse 0;
 
     const root = filesystem.open_volume(boot_services) catch {
         console.println("[!] FATAL: Cannot open boot volume");
@@ -73,10 +65,6 @@ pub fn main() noreturn {
         halt();
     };
 
-    kernel_boot_info.kernel_physical_base = load_result.physical_base;
-    kernel_boot_info.kernel_virtual_base = load_result.virtual_base;
-    kernel_boot_info.kernel_size = load_result.size;
-
     const max_phys_end = paging.get_max_physical_address(boot_services) catch {
         console.println("[!] FATAL: Cannot read memory map for paging");
         halt();
@@ -92,22 +80,62 @@ pub fn main() noreturn {
         halt();
     };
 
-    kernel_boot_info.memory_map_addr = @intFromPtr(memory.get_regions().ptr);
-    kernel_boot_info.memory_map_entries = memory.get_region_count();
+    // Allocate persistent pages for memory map (bootloader's static array will be reclaimed!)
+    const regions = memory.get_regions();
+    const memory_map_entries = memory.get_region_count();
+    const regions_size = memory_map_entries * @sizeOf(MemoryRegion);
+    const regions_pages = (regions_size + 0xfff) / 0x1000;
 
-    console.printfln(
-        "[+] Boot info prepared at 0x{x}",
-        .{@intFromPtr(&kernel_boot_info)},
-    );
+    const mmap_page = boot_services.allocatePages(
+        .any,
+        .loader_data,
+        @intCast(if (regions_pages == 0) 1 else regions_pages),
+    ) catch halt();
+
+    const mmap_dest: [*]MemoryRegion = @ptrCast(@alignCast(mmap_page.ptr));
+    @memcpy(mmap_dest[0..memory_map_entries], regions);
+
+    const memory_map_addr = @intFromPtr(mmap_dest);
+
+    // console.printfln(
+    //     "[+] Boot info prepared at 0x{x}",
+    //     .{@intFromPtr(&kernel_boot_info)},
+    // );
     console.printfln(
         "[*] Jumping to kernel entry at 0x{x}",
         .{load_result.entry_point},
     );
 
-    exit_boot_services_and_jump(load_result.entry_point, pml4);
+    // -------------------------------------------------------------------------
+    // Allocate BootInfo in *physical* memory
+    // -------------------------------------------------------------------------
+    const bootinfo_page = boot_services.allocatePages(
+        .any,
+        .loader_data,
+        1,
+    ) catch halt();
+
+    const bootinfo_phys: u64 = @intFromPtr(bootinfo_page.ptr);
+
+    const bootinfo: *boot_info.BootInfo =
+        @ptrFromInt(@as(usize, @intCast(bootinfo_phys)));
+
+    bootinfo.* = .{
+        .framebuffer = framebuffer,
+        .kernel_physical_base = load_result.physical_base,
+        .kernel_size = load_result.size,
+        .kernel_virtual_base = load_result.virtual_base,
+        .magic = BOOT_MAGIC,
+        .memory_map_addr = memory_map_addr,
+        .memory_map_entries = memory_map_entries,
+        .rsdp_address = rsdp_address,
+        .hhdm_base = paging.HHDM_BASE,
+    };
+
+    exit_boot_services_and_jump(load_result.entry_point, pml4, bootinfo_phys + paging.HHDM_BASE);
 }
 
-fn exit_boot_services_and_jump(entry_point: u64, pml4: *paging.PageTable) noreturn {
+fn exit_boot_services_and_jump(entry_point: u64, pml4: *paging.PageTable, bootinfo_hhdm: u64) noreturn {
     console.println("[*] Preparing to exit boot services...");
 
     const mmap_info = boot_services.getMemoryMapInfo() catch {
@@ -141,7 +169,8 @@ fn exit_boot_services_and_jump(entry_point: u64, pml4: *paging.PageTable) noretu
 
     const kernel_entry: *const fn (*boot_info.BootInfo) callconv(.{ .x86_64_sysv = .{} }) noreturn =
         @ptrFromInt(entry_point);
-    kernel_entry(&kernel_boot_info);
+    const bootinfo_ptr: *BootInfo = @ptrFromInt(@as(usize, @intCast(bootinfo_hhdm)));
+    kernel_entry(bootinfo_ptr);
 
     unreachable;
 }

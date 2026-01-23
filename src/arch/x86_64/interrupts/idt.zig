@@ -395,39 +395,26 @@ const exception_messages = [32][]const u8{
 // Common interrupt handler
 export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
     if (frame.int_num < 32) {
-        serial.write("Exception: ");
-        serial.write(exception_messages[@intCast(frame.int_num)]);
-        serial.write(" (");
-        serial.writeDec(frame.int_num);
-        serial.write(")\n");
+        serial.printfln("Exception: {s} ({d})", .{
+            exception_messages[@intCast(frame.int_num)],
+            frame.int_num,
+        });
 
-        serial.write("Error Code: ");
-        serial.writeHex(frame.error_code);
-        serial.write("\n");
+        serial.printfln("Error Code: 0x{x}", .{frame.error_code});
 
-        serial.write("RIP: ");
-        serial.writeHex(frame.rip);
-        serial.write("\n");
+        serial.printfln("RIP: 0x{x}", .{frame.rip});
 
-        serial.write("CS: ");
-        serial.writeHex(frame.cs);
-        serial.write(", RFLAGS: ");
-        serial.writeHex(frame.rflags);
-        serial.write("\n");
+        serial.printfln("CS: 0x{x}", .{frame.cs});
+        serial.printfln(", RFLAGS: 0x{x}", .{frame.rflags});
 
-        serial.write("RSP: ");
-        serial.writeHex(frame.rsp);
-        serial.write(", SS: ");
-        serial.writeHex(frame.ss);
-        serial.write("\n");
+        serial.printf("RSP: 0x{x}", .{frame.rsp});
+        serial.printfln(", SS: 0x{x}", .{frame.ss});
 
         if (frame.int_num == 14) {
             const cr2 = asm volatile ("mov %%cr2, %[cr2]"
                 : [cr2] "=r" (-> u64),
             );
-            serial.write("Page Fault at address: ");
-            serial.writeHex(cr2);
-            serial.write("\n");
+            serial.printfln("Page Fault at address: 0x{x}", .{cr2});
         }
 
         while (true) {
@@ -450,9 +437,7 @@ fn handleIRQ(irq: u8) void {
             // TODO: Keyboard handling
         },
         else => {
-            serial.write("Unhandled IRQ: ");
-            serial.writeDec(@intCast(irq));
-            serial.write("\n");
+            serial.printfln("Unhandled IRQ: {d}", .{irq});
         },
     }
 
