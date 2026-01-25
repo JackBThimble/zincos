@@ -20,6 +20,10 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
     });
 
+    const common_module = b.addModule("common", .{
+        .root_source_file = b.path("src/common.zig"),
+    });
+
     const arch_module = b.createModule(.{
         .root_source_file = b.path("src/arch/x86_64/main.zig"),
         .target = b.resolveTargetQuery(.{
@@ -27,6 +31,7 @@ pub fn build(b: *std.Build) void {
             .os_tag = .freestanding,
         }),
     });
+    arch_module.addImport("common", common_module);
 
     const kernel_optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .Debug });
     const kernel_target = b.resolveTargetQuery(.{ .os_tag = .freestanding, .ofmt = .elf, .cpu_arch = .x86_64 });
@@ -42,6 +47,7 @@ pub fn build(b: *std.Build) void {
         .omit_frame_pointer = true,
     });
     kernel_module.addImport("arch", arch_module);
+    kernel_module.addImport("common", common_module);
 
     // Build ISR assembly
     const isr_asm = b.addSystemCommand(&.{ "nasm", "-f", "elf64" });
@@ -49,12 +55,18 @@ pub fn build(b: *std.Build) void {
     const isr_obj = isr_asm.addOutputFileArg("isr.o");
     isr_asm.addFileArg(b.path("src/arch/x86_64/interrupts/isr.asm"));
 
+    const gdt_asm = b.addSystemCommand(&.{ "nasm", "-f", "elf64" });
+    gdt_asm.addArg("-o");
+    const gdt_obj = gdt_asm.addOutputFileArg("gdt.o");
+    gdt_asm.addFileArg(b.path("src/arch/x86_64/gdt_load.asm"));
+
     // Compile kernel to object file (not executable)
     const kernel_obj = b.addObject(.{
         .name = "kernel",
         .root_module = kernel_module,
     });
     kernel_obj.root_module.addObjectFile(isr_obj);
+    kernel_obj.root_module.addObjectFile(gdt_obj);
 
     // Link with system ld.lld using our linker script (bypasses Zig's broken LLD integration)
     const link_cmd = b.addSystemCommand(&.{"ld.lld"});

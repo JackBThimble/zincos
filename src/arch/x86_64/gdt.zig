@@ -103,7 +103,7 @@ fn createTSSDescriptor(tss_ptr: *TSS) void {
     lower |=
         @as(u64, (base >> 16) & 0xff) << 32; // base middle
     lower |=
-        @as(u64, Access.present | Access.accessed | Access.tss_available) << 40;
+        @as(u64, Access.present | Access.tss_available) << 40;
     lower |=
         @as(u64, (limit >> 16) & 0x0f) << 48; // limit high
     lower |=
@@ -177,33 +177,17 @@ pub fn init() void {
     ltss();
 }
 
-fn lgdt() void {
-    asm volatile (
-        \\lgdtq %[gdtr]
-        :
-        : [gdtr] "m" (gdtr),
-    );
+extern fn gdt_load_and_jump(gdtr_ptr: *const GDTR) callconv(.{ .x86_64_sysv = .{} }) void;
 
-    asm volatile (
-        \\push $0x08
-        \\lea 1f(%%rip), %%rax
-        \\push %%rax
-        \\lretq
-        \\1:
-        \\mov $0x10, %%ax
-        \\mov %%ax, %%ds
-        \\mov %%ax, %%es
-        \\mov %%ax, %%fs
-        \\mov %%ax, %%gs
-        \\mov %%ax, %%ss
-        ::: "rax");
+fn lgdt() void {
+    gdt_load_and_jump(&gdtr);
 }
 
 fn ltss() void {
     asm volatile (
         \\mov $0x28, %%ax
         \\ltr %%ax
-        ::: "rax");
+        ::: .{ .rax = true, .memory = true });
 }
 
 // Helper function to update RSP0 (call this when switching tasks/processes)

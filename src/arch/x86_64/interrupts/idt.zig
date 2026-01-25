@@ -395,7 +395,7 @@ const exception_messages = [32][]const u8{
 // Common interrupt handler
 export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
     if (frame.int_num < 32) {
-        serial.printfln("Exception: {s} ({d})", .{
+        serial.printfln("\n\nException: {s} ({d})", .{
             exception_messages[@intCast(frame.int_num)],
             frame.int_num,
         });
@@ -404,17 +404,14 @@ export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
 
         serial.printfln("RIP: 0x{x}", .{frame.rip});
 
-        serial.printfln("CS: 0x{x}", .{frame.cs});
-        serial.printfln(", RFLAGS: 0x{x}", .{frame.rflags});
+        serial.printfln("\nCS: 0x{x}", .{frame.cs});
+        serial.printfln("RFLAGS: 0x{x}", .{frame.rflags});
 
-        serial.printf("RSP: 0x{x}", .{frame.rsp});
-        serial.printfln(", SS: 0x{x}", .{frame.ss});
+        serial.printfln("\nRSP: 0x{x}", .{frame.rsp});
+        serial.printfln("SS: 0x{x}", .{frame.ss});
 
         if (frame.int_num == 14) {
-            const cr2 = asm volatile ("mov %%cr2, %[cr2]"
-                : [cr2] "=r" (-> u64),
-            );
-            serial.printfln("Page Fault at address: 0x{x}", .{cr2});
+            @import("page_fault.zig").handlePageFault(frame.error_code, frame.rip, frame.cs, frame.rsp, frame.ss, frame.rflags);
         }
 
         while (true) {
