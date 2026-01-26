@@ -26,12 +26,10 @@ const BOOT_MAGIC = common.BOOT_MAGIC;
 
 const pmm = @import("mm/pmm.zig");
 const vmm = @import("mm/vmm.zig");
-const heap = @import("mm/heap.zig");
+const kheap = @import("mm/kheap.zig");
+const stress = @import("mm/kalloc_stress.zig");
 
 const fb = @import("graphics/framebuffer.zig");
-
-const kalloc = @import("mm/kalloc.zig");
-const stress = @import("mm/kalloc_stress.zig");
 
 // ============================================================================
 // Kernel Entry Point
@@ -125,72 +123,42 @@ export fn _start(boot_info: *BootInfo) callconv(.{ .x86_64_sysv = .{} }) noretur
     fb.fill_rect(256, y, 100, 40, 0x00, 0x00, 0xFF);
     fb.draw_string(260, y + 16, "BLUE", 0xFF, 0xFF, 0xFF);
 
+    // =========================================================================
+    // Memory Management Initialization
+    // =========================================================================
     var fa = pmm.FrameAllocator.init(g_boot_info);
+    serial.printfln("PMM: frames total={} used={} free={}", .{
+        fa.frame_count,
+        fa.used_frames,
+        fa.frame_count - fa.used_frames,
+    });
 
     var mapper = vmm.Mapper{
         .hhdm_base = g_boot_info.hhdm_base,
         .fa = &fa,
     };
 
-    var h = heap.Heap.init(&mapper, 0xffff_ffff_c000_0000, 256 * 1024 * 1024);
+    // Kernel heap: 512MB virtual region starting at 0xFFFFC00000000000
+    const HEAP_BASE: u64 = 0xFFFF_C000_0000_0000;
+    const HEAP_SIZE: u64 = 512 * 1024 * 1024;
+    var heap = kheap.KHeap.init(&mapper, HEAP_BASE, HEAP_SIZE);
+    serial.printfln("Heap initialized at 0x{x}, size {} MB", .{ HEAP_BASE, HEAP_SIZE / (1024 * 1024) });
 
-    serial.printf("frames total={} used={} free={}\n", .{ fa.frame_count, fa.used_frames, fa.frame_count - fa.used_frames });
+    // Run stress test to validate allocator
+    stress.heap_stress_test(&heap);
 
-    const p = h.alloc(4096, 16) orelse @panic("heap alloc failed");
-    serial.printf("heap alloc ok: {x}\n", .{@intFromPtr(p)});
-    const TEST_VA: u64 = 0xffff_ffff_d000_0000;
-    const flags = vmm.PTE_PRESENT | vmm.PTE_WRITABLE | vmm.PTE_NX;
+    // Verify heap integrity and dump statistics
+    heap.dumpStats();
 
-    const p1 = fa.allocFrame() orelse @panic("no frame");
-    mapper.map4k(TEST_VA, p1, flags);
+    // =========================================================================
+    // TODO: SMP Bring-up
+    // =========================================================================
+    // 1. Parse ACPI MADT to find AP processor IDs
+    // 2. Allocate per-CPU stacks (e.g., 16KB each)
+    // 3. Set up AP trampoline code in low memory
+    // 4. Send INIT-SIPI-SIPI sequence to wake APs
+    // 5. Each AP initializes its own GDT/IDT/TSS
 
-    const ptr1: *volatile u64 = @ptrFromInt(@as(usize, @intCast(TEST_VA)));
-    serial.printfln("mapped {x} -> {x}, wrote {x}", .{ TEST_VA, p1, ptr1.* });
-
-    const old = mapper.unmap4k(TEST_VA) orelse @panic("unmap failed");
-    serial.printfln("unmapped {x} old_phys={x}\n", .{ TEST_VA, old });
-
-    fa.freeFrame(old);
-    serial.printfln("freed frame {x}", .{old});
-
-    const p2 = fa.allocFrame() orelse @panic("no frame after free");
-    serial.printfln("realloc frame {x}", .{p2});
-
-    mapper.map4k(TEST_VA, p2, flags);
-    const ptr2: *volatile u64 = @ptrFromInt(@as(usize, @intCast(TEST_VA)));
-    ptr2.* = 0xaabb_ccdd_eeff_0011;
-
-    serial.printfln("remapped {x} -> {x}, wrote {x}", .{ TEST_VA, p2, ptr2.* });
-
-    const a = h.alloc(1, 1) orelse @panic("heap alloc (a) failed");
-    const b = h.alloc(64, 64) orelse @panic("heap alloc (b) failed");
-    const c = h.alloc(4096, 4096) orelse @panic("heap alloc (c) failed");
-
-    _ = a;
-    _ = b;
-    _ = c;
-
-    var h2 = heap.Heap.init(&mapper, 0xffff_ffff_d000_0000, 512 * 1024 * 1024);
-    var ka = kalloc.KAlloc.init(&h2);
-
-    const p3 = ka.kmalloc(64) orelse @panic("kamlloc failed");
-    @memset(p3[0..64], 0xab);
-
-    ka.free(p3);
-
-    const q = ka.kmallocAligned(4096, 4096) orelse @panic("kamlloc aligned failed");
-    ka.free(q);
-
-    const r = ka.kmalloc(128) orelse @panic("kmalloc (r) failed");
-    const s = ka.kmalloc(128) orelse @panic("kmalloc (s) failed");
-    ka.free(r);
-    ka.free(s);
-
-    const t = ka.kmalloc(200) orelse @panic("kmalloc (t) failed");
-    ka.free(t);
-
-    var kheap = @import("mm/kheap.zig").KHeap.init(&mapper, 0xffff_ffff_d000_0000, 512 * 1024 * 1024);
-    _ = stress.heap_stress_test(&kheap);
     serial.println("\nKernel initialization complete. Halting.\n");
 
     halt();
