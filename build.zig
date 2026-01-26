@@ -73,6 +73,7 @@ pub fn build(b: *std.Build) void {
     link_cmd.addArg("-T");
     link_cmd.addFileArg(b.path("src/kernel/linker.ld"));
     link_cmd.addArg("-o");
+
     const kernel_elf = link_cmd.addOutputFileArg("ZincOS");
     link_cmd.addArtifactArg(kernel_obj);
 
@@ -102,6 +103,9 @@ pub fn build(b: *std.Build) void {
     install_kernel.step.dependOn(&link_cmd.step);
     b.getInstallStep().dependOn(&install_kernel.step);
 
+    const install_debug_kernel = b.addInstallBinFile(kernel_elf, b.fmt("{s}", .{"ZincOS"}));
+    b.getInstallStep().dependOn(&install_debug_kernel.step);
+
     const qemu_args = [_][]const u8{
         "qemu-system-x86_64",
         "-m",
@@ -116,11 +120,35 @@ pub fn build(b: *std.Build) void {
         "-enable-kvm",
         "-cpu",
         "host",
-        "-s",
     };
+
     const qemu_cmd = b.addSystemCommand(&qemu_args);
     qemu_cmd.step.dependOn(b.getInstallStep());
 
     const run_qemu_cmd = b.step("run", "Run QMEU");
     run_qemu_cmd.dependOn(&qemu_cmd.step);
+
+    const debug_qemu_args = [_][]const u8{
+        "qemu-system-x86_64",
+        "-m",
+        "1G",
+        "-bios",
+        "/usr/share/ovmf/x64/OVMF.4m.fd",
+        "-drive",
+        b.fmt("file=fat:rw:{s}/{s},format=raw", .{ b.install_path, out_dir_name }),
+        "-serial",
+        "mon:stdio",
+        "-no-reboot",
+        "-S",
+        "-gdb",
+        "tcp::1234",
+        "-cpu",
+        "qemu64",
+    };
+
+    const debug_qemu_cmd = b.addSystemCommand(&debug_qemu_args);
+    debug_qemu_cmd.step.dependOn(b.getInstallStep());
+
+    const run_debug_cmd = b.step("debug", "Debug QEMU");
+    run_debug_cmd.dependOn(&debug_qemu_cmd.step);
 }

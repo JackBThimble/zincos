@@ -59,8 +59,9 @@ pub const KAlloc = struct {
             if (!blk.is_free) @panic("free list corrupted");
 
             const blk_addr = @intFromPtr(blk);
+            const blk_size = blk.size;
 
-            const lay = layout(blk_addr, blk.size, size, min_align) orelse {
+            const lay = layout(blk_addr, blk_size, size, min_align) orelse {
                 prev = blk;
                 continue;
             };
@@ -77,14 +78,19 @@ pub const KAlloc = struct {
                 self.freeInsert(prefix_blk);
 
                 blk = @ptrFromInt(blk_addr + lay.prefix);
-
-                blk.size -= lay.prefix;
+                blk.size = blk_size - lay.prefix;
             }
 
             // tail split
-            const tail = blk.size - lay.alloc_total;
+            const blk_new_addr = @intFromPtr(blk);
+            const alloc_size = (blk_addr + lay.alloc_total) - blk_new_addr;
+
+            const block_align = @alignOf(Block);
+            const alloc_size_aligned = alignUp(alloc_size, block_align);
+            const tail = blk.size - alloc_size_aligned;
+
             if (tail >= MIN_SPLIT) {
-                const tail_blk: *Block = @ptrFromInt(blk_addr + lay.alloc_total);
+                const tail_blk: *Block = @ptrFromInt(blk_new_addr + alloc_size_aligned);
 
                 tail_blk.* = Block{
                     .size = tail,
@@ -92,7 +98,7 @@ pub const KAlloc = struct {
                     .next = null,
                 };
                 self.freeInsert(tail_blk);
-                blk.size = lay.alloc_total;
+                blk.size = alloc_size_aligned;
             }
 
             blk.is_free = false;
@@ -133,7 +139,7 @@ pub const KAlloc = struct {
             self.freeInsert(prefix_blk);
 
             blk = @ptrFromInt(raw_addr + lay.prefix);
-            blk.size -= lay.prefix;
+            blk.size = request - lay.prefix;
             blk.is_free = false;
         }
 
@@ -232,7 +238,7 @@ pub const KAlloc = struct {
     }
 };
 
-const Block = packed struct {
+const Block = extern struct {
     // Total size of this block in bytes, including header and user/padding.
     size: usize,
     is_free: bool,

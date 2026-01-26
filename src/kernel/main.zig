@@ -189,8 +189,14 @@ export fn _start(boot_info: *BootInfo) callconv(.{ .x86_64_sysv = .{} }) noretur
     const t = ka.kmalloc(200) orelse @panic("kmalloc (t) failed");
     ka.free(t);
 
-    stress.run(&ka, 1000);
+    var kheap = @import("mm/kheap.zig").KHeap.init(&mapper, 0xffff_ffff_d000_0000, 512 * 1024 * 1024);
+    _ = stress.heap_stress_test(&kheap);
     serial.println("\nKernel initialization complete. Halting.\n");
 
     halt();
 }
+
+pub const std_options: std.Options = .{
+    .page_size_max = 4096,
+    .page_size_min = 4096,
+};

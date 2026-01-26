@@ -1,0 +1,7 @@
+gdb-remote localhost:1234
+
+file zig-out/bin/ZincOS
+
+breakpoint set --name _start
+
+settings set target.x86-disassembly-flavor intel

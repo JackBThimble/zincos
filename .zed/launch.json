@@ -1,0 +1,45 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "attach",
+      "name": "Attach to QEMU (ZincOS Kernel)",
+      "program": "${workspaceFolder}/zig-out/bin/ZincOS",
+      "stopOnEntry": true,
+      "preLaunchTask": "Debug Kernel (Launch QEMU)",
+      "postDebugTask": null,
+      "miDebuggerPath": "/usr/bin/lldb",
+      "miDebuggerServerAddress": "localhost:1234",
+      "setupCommands": [
+        {
+          "description": "Set disassembly flavor",
+          "text": "settings set target.x86-disassembly-flavor intel",
+        },
+      ],
+      "sourceMaps": {
+        "/proc/self/cwd": "${workspaceFolder}",
+      },
+    },
+    {
+      "type": "gdb",
+      "request": "attach",
+      "name": "Attach to QEMU (GDB)",
+      "program": "${workspaceFolder}/zig-out/bin/ZincOS",
+      "stopOnEntry": true,
+      "preLaunchTask": "Debug Kernel (Launch QEMU)",
+      "miDebuggerPath": "/usr/bin/gdb",
+      "miDebuggerServiceAddress": "localhost:1234",
+      "setupCommands": [
+        {
+          "description": "Set architecture",
+          "text": "set architecture i386:x86-64:intel",
+        },
+        {
+          "description": "Set disassembly flavor",
+          "text": "set disassembly-flavor intel",
+        },
+      ],
+    },
+  ],
+}

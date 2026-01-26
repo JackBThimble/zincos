@@ -51,4 +51,22 @@
     // Represents the tags for inline runnable indicators, or spawning multiple tasks at once.
     // "tags": []
   },
+  {
+    "label": "Build Kernel",
+    "command": "zig build",
+    "args": [],
+    "reveal": "always",
+  },
+  {
+    "label": "Run Kernel",
+    "command": "zig build run",
+    "args": [],
+    "reveal": "always",
+  },
+  {
+    "label": "Debug Kernel (Launch QEMU)",
+    "command": "zig build debug",
+    "args": [],
+    "reveal": "always",
+  },
 ]

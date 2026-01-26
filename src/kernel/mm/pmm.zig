@@ -86,9 +86,6 @@ pub const FrameAllocator = struct {
             var bit: u3 = 0;
             while (bit < 8) : (bit += 1) {
                 if ((b & mask) == 0) {
-                    self.bitmap[byte_i] = b | mask;
-                    self.used_frames += 1;
-
                     const frame_index = byte_i * 8 + bit;
                     if (frame_index >= self.frame_count) return null;
 

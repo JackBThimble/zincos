@@ -159,12 +159,13 @@ fn readCr3() u64 {
 }
 
 fn invlpg(addr: u64) void {
-    const p: *volatile u8 = @ptrFromInt(@as(usize, @intCast(addr)));
+    // const p: *volatile u8 = @ptrFromInt(@as(usize, @intCast(addr)));
     asm volatile (
-        \\invlpg %[mem]
+        \\mov %[addr], %%rax
+        \\invlpg (%%rax)
         :
-        : [mem] "m" (p.*),
-        : .{ .memory = true });
+        : [addr] "r" (addr),
+        : .{ .memory = true, .rax = true });
 }
 
 fn alignDown(x: u64) u64 {
