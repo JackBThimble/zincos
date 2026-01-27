@@ -64,35 +64,6 @@ pub fn printfln(comptime fmt: []const u8, args: anytype) void {
     putChar('\n');
 }
 
-pub fn writeHex(value: u64) void {
-    const hex = "0123456789ABCDEF";
-    print("0x");
-    const v = value;
-    var started = false;
-    var i: u6 = 60;
-    while (true) {
-        const nibble: u4 = @truncate(v >> i);
-        if (nibble != 0 or started or i == 0) {
-            putChar(hex[nibble]);
-            started = true;
-        }
-        if (i == 0) break;
-        i -= 4;
-    }
-}
-
-pub fn writeDec(value: u64) void {
-    var v = value;
-    if (v == 0) {
-        putChar('0');
-        return;
-    }
-
-    var buf: [20]u8 = undefined;
-    var i: usize = buf.len;
-    while (v > 0) : (v /= 10) {
-        i -= 1;
-        buf[i] = @as(u8, '0' + @as(u8, @truncate(v % 10)));
-    }
-    print(buf[i..]);
+pub fn write(bytes: []const u8) void {
+    print(bytes);
 }

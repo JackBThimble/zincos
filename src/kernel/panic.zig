@@ -2,7 +2,7 @@ const std = @import("std");
 const arch = @import("arch");
 const serial = arch.serial;
 const dumpCpuState = arch.dumpCpuState;
-const halt = arch.halt;
+const halt = arch.halt_catch_fire;
 
 pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
     serial.println("\n============================================");

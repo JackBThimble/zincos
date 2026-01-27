@@ -7,12 +7,9 @@
 
 const std = @import("std");
 const arch = @import("arch");
-const gdt = arch.gdt;
-const idt = arch.idt;
-const apic = arch.apic;
-const syscall = arch.syscall;
 const serial = arch.serial;
-const halt = arch.halt;
+const tsc = arch.tsc;
+const halt = arch.halt_catch_fire;
 const builtin = @import("std").builtin;
 pub const panic = @import("panic.zig").panic;
 
@@ -23,11 +20,14 @@ const PixelFormat = common.PixelFormat;
 const MemoryRegion = common.MemoryRegion;
 const BootInfo = common.BootInfo;
 const BOOT_MAGIC = common.BOOT_MAGIC;
+const log = common.log;
 
-const pmm = @import("mm/pmm.zig");
-const vmm = @import("mm/vmm.zig");
-const kheap = @import("mm/kheap.zig");
-const stress = @import("mm/kalloc_stress.zig");
+const mm = @import("mm");
+const pmm = mm.pmm;
+const vmm = mm.vmm;
+const kheap = mm.heap;
+const mem_dbg = mm.debug;
+const cpu_local = @import("cpu_local.zig");
 
 const fb = @import("graphics/framebuffer.zig");
 
@@ -38,12 +38,13 @@ const fb = @import("graphics/framebuffer.zig");
 export fn _start(boot_info: *BootInfo) callconv(.{ .x86_64_sysv = .{} }) noreturn {
     common.g_boot_info = boot_info;
     const g_boot_info = common.g_boot_info.?;
-    // Initialize serial for debug output
-    serial.init();
-    serial.println("\n\n=== Kernel Started ===");
 
-    idt.init();
-    gdt.init();
+    arch.cpu_init_bsp();
+    arch.serial.init();
+
+    log.setWriter(serial.write);
+    log.setCpuId(arch.cpu_id);
+    log.setTscFn(arch.now);
 
     var cs: u16 = 0;
     var ss: u16 = 0;
@@ -57,37 +58,36 @@ export fn _start(boot_info: *BootInfo) callconv(.{ .x86_64_sysv = .{} }) noretur
         :
         : .{});
 
-    serial.printfln("After gdt.init(): CS=0x{x}  SS=0x{x}", .{ cs, ss });
+    log.debug("GDT Initialization: CS=0x{x}  SS=0x{x}", .{ cs, ss });
     // Validate boot info magic
     if (common.g_boot_info.?.magic != BOOT_MAGIC) {
-        serial.println("ERROR: Invalid boot magic!");
+        log.err("ERROR: Invalid boot magic!", .{});
         halt();
     }
 
-    serial.println("Boot magic validated");
+    log.debug("Bootloader info: ", .{});
+    log.debug("\tBOOT_MAGIC: 0x{x}", .{g_boot_info.magic});
 
-    serial.printfln("BOOT_MAGIC: 0x{x}", .{g_boot_info.magic});
-
-    serial.printfln("Kernel physical base: 0x{x}", .{
+    log.debug("\tKernel physical base: 0x{x}", .{
         g_boot_info.kernel_physical_base,
     });
 
-    serial.printfln("Kernel virtual base: 0x{x}", .{
+    log.debug("\tKernel virtual base: 0x{x}", .{
         g_boot_info.kernel_virtual_base,
     });
 
-    serial.printfln("Kernel size: 0x{x}", .{
+    log.debug("\tKernel size: 0x{x}", .{
         g_boot_info.kernel_size,
     });
 
     // Print boot info
-    serial.printfln("Framebuffer: 0x{x}", .{g_boot_info.framebuffer.base_address});
+    log.debug("\tFramebuffer: 0x{x}", .{g_boot_info.framebuffer.base_address});
 
-    serial.printfln("Resolution: {d}x{d}", .{ g_boot_info.framebuffer.width, g_boot_info.framebuffer.height });
+    log.debug("\tResolution: {d}x{d}", .{ g_boot_info.framebuffer.width, g_boot_info.framebuffer.height });
 
-    serial.printfln("Memory regions: {d}", .{g_boot_info.memory_map_entries});
+    log.debug("\tMemory regions: {d}", .{g_boot_info.memory_map_entries});
 
-    serial.printfln("RSDP: 0x{x}", .{g_boot_info.rsdp_address});
+    log.debug("\tRSDP: 0x{x}", .{g_boot_info.rsdp_address});
 
     // Initialize framebuffer
     fb.init_framebuffer(g_boot_info);
@@ -127,7 +127,7 @@ export fn _start(boot_info: *BootInfo) callconv(.{ .x86_64_sysv = .{} }) noretur
     // Memory Management Initialization
     // =========================================================================
     var fa = pmm.FrameAllocator.init(g_boot_info);
-    serial.printfln("PMM: frames total={} used={} free={}", .{
+    log.debug("PMM: frames total={} used={} free={}", .{
         fa.frame_count,
         fa.used_frames,
         fa.frame_count - fa.used_frames,
@@ -142,10 +142,10 @@ export fn _start(boot_info: *BootInfo) callconv(.{ .x86_64_sysv = .{} }) noretur
     const HEAP_BASE: u64 = 0xFFFF_C000_0000_0000;
     const HEAP_SIZE: u64 = 512 * 1024 * 1024;
     var heap = kheap.KHeap.init(&mapper, HEAP_BASE, HEAP_SIZE);
-    serial.printfln("Heap initialized at 0x{x}, size {} MB", .{ HEAP_BASE, HEAP_SIZE / (1024 * 1024) });
+    log.debug("Heap initialized at 0x{x}, size {} MB", .{ HEAP_BASE, HEAP_SIZE / (1024 * 1024) });
 
     // Run stress test to validate allocator
-    stress.heap_stress_test(&heap);
+    mem_dbg.heap_stress_test(&heap);
 
     // Verify heap integrity and dump statistics
     heap.dumpStats();
@@ -159,7 +159,7 @@ export fn _start(boot_info: *BootInfo) callconv(.{ .x86_64_sysv = .{} }) noretur
     // 4. Send INIT-SIPI-SIPI sequence to wake APs
     // 5. Each AP initializes its own GDT/IDT/TSS
 
-    serial.println("\nKernel initialization complete. Halting.\n");
+    log.info("Kernel initialization complete. Halting.", .{});
 
     halt();
 }

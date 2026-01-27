@@ -1,40 +1,65 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    // ===============================
+    //
+    // Optimization options
+    //
+    // ===============================
     const efi_optimize = b.standardOptimizeOption(.{});
+    const kernel_optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .Debug });
+
+    // =========================================================================
+    //
+    // Targets
+    //
+    // =========================================================================
     const efi_target = b.resolveTargetQuery(.{
         .os_tag = .uefi,
         .cpu_arch = .x86_64,
         .abi = .msvc,
         .ofmt = .coff,
     });
+    const kernel_target = b.resolveTargetQuery(.{
+        .os_tag = .freestanding,
+        .ofmt = .elf,
+        .cpu_arch = .x86_64,
+    });
+
+    // =========================================================================
+    //
+    // Modules
+    //
+    // =========================================================================
+
+    // bootloader module
     const efi_module = b.addModule("efi_module", .{
         .code_model = .default,
         .root_source_file = b.path("src/boot/main.zig"),
         .target = efi_target,
         .optimize = efi_optimize,
     });
-    const efi_exe = b.addExecutable(.{
-        .name = "bootx64.efi",
-        .root_module = efi_module,
-        .linkage = .static,
-    });
 
+    // Common HAL layer
     const common_module = b.addModule("common", .{
-        .root_source_file = b.path("src/common.zig"),
+        .root_source_file = b.path("src/common/main.zig"),
     });
 
+    // Architecture specific
     const arch_module = b.createModule(.{
-        .root_source_file = b.path("src/arch/x86_64/main.zig"),
+        .root_source_file = b.path("src/arch/arch.zig"),
         .target = b.resolveTargetQuery(.{
             .cpu_arch = .x86_64,
             .os_tag = .freestanding,
         }),
     });
-    arch_module.addImport("common", common_module);
 
-    const kernel_optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .Debug });
-    const kernel_target = b.resolveTargetQuery(.{ .os_tag = .freestanding, .ofmt = .elf, .cpu_arch = .x86_64 });
+    // Memory management module
+    const memory_module = b.createModule(.{
+        .root_source_file = b.path("src/mm/main.zig"),
+    });
+
+    // Kernel module
     const kernel_module = b.addModule("kernel_module", .{
         .code_model = .kernel,
         .root_source_file = b.path("src/kernel/main.zig"),
@@ -46,17 +71,38 @@ pub fn build(b: *std.Build) void {
         .stack_protector = false,
         .omit_frame_pointer = true,
     });
+
+    // =========================================================================
+    //
+    // Imports
+    //
+    // =========================================================================
+    memory_module.addImport("common", common_module);
+    memory_module.addImport("arch", arch_module);
+    arch_module.addImport("mm", memory_module);
+    arch_module.addImport("common", common_module);
+
     kernel_module.addImport("arch", arch_module);
     kernel_module.addImport("common", common_module);
+    kernel_module.addImport("mm", memory_module);
 
-    // Build ISR assembly
+    // =========================================================================
+    //
+    // NASM Builds
+    //
+    // =========================================================================
     const isr_asm = b.addSystemCommand(&.{ "nasm", "-f", "elf64" });
     isr_asm.addArg("-o");
-    const isr_obj = isr_asm.addOutputFileArg("isr.o");
-    isr_asm.addFileArg(b.path("src/arch/x86_64/interrupts/isr.asm"));
-
     const gdt_asm = b.addSystemCommand(&.{ "nasm", "-f", "elf64" });
     gdt_asm.addArg("-o");
+
+    // =========================================================================
+    //
+    // Objects
+    //
+    // =========================================================================
+    const isr_obj = isr_asm.addOutputFileArg("isr.o");
+    isr_asm.addFileArg(b.path("src/arch/x86_64/interrupts/isr.asm"));
     const gdt_obj = gdt_asm.addOutputFileArg("gdt.o");
     gdt_asm.addFileArg(b.path("src/arch/x86_64/gdt_load.asm"));
 
@@ -67,15 +113,6 @@ pub fn build(b: *std.Build) void {
     });
     kernel_obj.root_module.addObjectFile(isr_obj);
     kernel_obj.root_module.addObjectFile(gdt_obj);
-
-    // Link with system ld.lld using our linker script (bypasses Zig's broken LLD integration)
-    const link_cmd = b.addSystemCommand(&.{"ld.lld"});
-    link_cmd.addArg("-T");
-    link_cmd.addFileArg(b.path("src/kernel/linker.ld"));
-    link_cmd.addArg("-o");
-
-    const kernel_elf = link_cmd.addOutputFileArg("ZincOS");
-    link_cmd.addArtifactArg(kernel_obj);
 
     // Add Zig's compiler-rt builtins (memcpy, memmove, etc.)
     const builtin_obj = b.addObject(.{
@@ -88,24 +125,90 @@ pub fn build(b: *std.Build) void {
             .red_zone = false,
         }),
     });
+
+    // =========================================================================
+    //
+    // Linker
+    //
+    // =========================================================================
+
+    // Link with system ld.lld using our linker script
+    // (bypasses Zig's broken LLD integration)
+    const link_cmd = b.addSystemCommand(&.{"ld.lld"});
+
+    // Kernel linking
+    link_cmd.addArg("-T");
+    link_cmd.addFileArg(b.path("src/kernel/linker.ld"));
+
+    // Output file MUST come before input objects
+    link_cmd.addArg("-o");
+    const kernel_elf = link_cmd.addOutputFileArg("ZincOS");
+
+    // Input object files
+    link_cmd.addArtifactArg(kernel_obj);
     link_cmd.addArtifactArg(builtin_obj);
 
+    // =========================================================================
+    //
+    // Executables
+    //
+    // =========================================================================
+
+    // UEFI application
+    const efi_exe = b.addExecutable(.{
+        .name = "bootx64.efi",
+        .root_module = efi_module,
+        .linkage = .static,
+    });
+
+    // =========================================================================
+    //
+    // Installation files
+    //
+    // =========================================================================
+
+    // Ouput directory for fat img (for QEMU)
     const out_dir_name = "img";
+
+    // UEFI application at img/efi/boot/bootx64.efi
     const install_efi = b.addInstallFile(
         efi_exe.getEmittedBin(),
         b.fmt("{s}/efi/boot/{s}", .{ out_dir_name, efi_exe.name }),
     );
 
+    // Kernel written to img directory
+    const install_kernel = b.addInstallFile(kernel_elf, b.fmt("{s}/efi/{s}", .{
+        out_dir_name,
+        "ZincOS",
+    }));
+
+    // Kernel written to zig-out/bin/ZincOS
+    const install_debug_kernel = b.addInstallBinFile(kernel_elf, b.fmt(
+        "{s}",
+        .{"ZincOS"},
+    ));
+
+    // =========================================================================
+    //
+    // Installation steps
+    //
+    // =========================================================================
+
+    // Install bootx64.efi
     install_efi.step.dependOn(&efi_exe.step);
     b.getInstallStep().dependOn(&install_efi.step);
 
-    const install_kernel = b.addInstallFile(kernel_elf, b.fmt("{s}/efi/{s}", .{ out_dir_name, "ZincOS" }));
+    // Install kernel
     install_kernel.step.dependOn(&link_cmd.step);
     b.getInstallStep().dependOn(&install_kernel.step);
 
-    const install_debug_kernel = b.addInstallBinFile(kernel_elf, b.fmt("{s}", .{"ZincOS"}));
     b.getInstallStep().dependOn(&install_debug_kernel.step);
 
+    // ==========================================================================
+    //
+    // Run commands arguments
+    //
+    // ==========================================================================
     const qemu_args = [_][]const u8{
         "qemu-system-x86_64",
         "-m",
@@ -121,12 +224,6 @@ pub fn build(b: *std.Build) void {
         "-cpu",
         "host",
     };
-
-    const qemu_cmd = b.addSystemCommand(&qemu_args);
-    qemu_cmd.step.dependOn(b.getInstallStep());
-
-    const run_qemu_cmd = b.step("run", "Run QMEU");
-    run_qemu_cmd.dependOn(&qemu_cmd.step);
 
     const debug_qemu_args = [_][]const u8{
         "qemu-system-x86_64",
@@ -146,9 +243,19 @@ pub fn build(b: *std.Build) void {
         "qemu64",
     };
 
+    // =========================================================================
+    //
+    // Run commands
+    //
+    // =========================================================================
+    const qemu_cmd = b.addSystemCommand(&qemu_args);
+    const run_qemu_cmd = b.step("run", "Run QMEU");
     const debug_qemu_cmd = b.addSystemCommand(&debug_qemu_args);
+    const run_debug_cmd = b.step("debug", "Debug QEMU");
+
+    qemu_cmd.step.dependOn(b.getInstallStep());
     debug_qemu_cmd.step.dependOn(b.getInstallStep());
 
-    const run_debug_cmd = b.step("debug", "Debug QEMU");
+    run_qemu_cmd.dependOn(&qemu_cmd.step);
     run_debug_cmd.dependOn(&debug_qemu_cmd.step);
 }

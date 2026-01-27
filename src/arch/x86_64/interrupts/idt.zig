@@ -335,7 +335,7 @@ pub fn init() void {
     );
 
     // IRQs (32-47) - hardware interrupts from PIC
-    var i: u8 = 32;
+    var i: u8 = 33;
     while (i < 48) : (i += 1) {
         setIDTEntry(
             i,
@@ -345,6 +345,8 @@ pub fn init() void {
             IDTFlags.present | IDTFlags.dpl_0 | IDTFlags.interrupt_gate,
         );
     }
+
+    setIDTEntry(32, @intFromPtr(&irq0), 0x08, 0, IDTFlags.present | IDTFlags.dpl_0 | IDTFlags.interrupt_gate);
 
     // Set up IDTR
     idtr.limit = @sizeOf(@TypeOf(idt)) - 1;
@@ -417,7 +419,11 @@ export fn interruptHandler(frame: *InterruptFrame) callconv(.c) void {
         while (true) {
             asm volatile ("hlt");
         }
-    } else if (frame.int_num >= 32 and frame.int_num < 48) {
+    } else if (frame.int_num == 32) {
+        @import("../lapic.zig").eoi();
+        // TODO: Tickless scheduler hook later
+        // For now: debug print occasionally
+    } else if (frame.int_num > 32 and frame.int_num < 48) {
         handleIRQ(@truncate(frame.int_num - 32));
     }
 }

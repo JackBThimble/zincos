@@ -21,7 +21,7 @@ const TSSDescriptor = packed struct {
 };
 
 // Task State Segment for x86_64
-const TSS = packed struct {
+pub const TSS = packed struct {
     reserved0: u32,
     rsp0: u64, // Stack pointer for ring 0
     rsp1: u64, // unused
