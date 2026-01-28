@@ -33,8 +33,8 @@ pub fn mmio_init(mapper: vmm.Mapper) void {
 
 /// Initializes single AP
 /// x86_64 - IDT, GDT, PIC, per-cpu stack, etc.
-pub fn cpu_init_ap() void {
-    return Impl.cpu_init_ap();
+pub fn cpu_init_ap(stack_top: usize) void {
+    return Impl.cpu_init_ap(stack_top);
 }
 
 // ---- Interrupts ----

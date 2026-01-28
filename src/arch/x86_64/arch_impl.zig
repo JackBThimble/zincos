@@ -13,18 +13,51 @@ const serial = @import("serial.zig");
 const tsc = @import("tsc");
 
 // --- CPU + init ---
+fn enableSse() void {
+    var cr0: u64 = 0;
+    var cr4: u64 = 0;
+
+    asm volatile ("mov %%cr0, %[out]"
+        : [out] "=r" (cr0),
+    );
+    // Clear EM (bit 2), set MP (bit 1), set NE (bit 5)
+    cr0 &= ~@as(u64, 1 << 2);
+    cr0 |= @as(u64, 1 << 1) | @as(u64, 1 << 5);
+    asm volatile ("mov %[in], %%cr0"
+        :
+        : [in] "r" (cr0),
+        : "memory");
+
+    asm volatile ("mov %%cr4, %[out]"
+        : [out] "=r" (cr4),
+    );
+    // Enable SSE: OSFXSR (bit 9) and OSXMMEXCPT (bit 10)
+    cr4 |= @as(u64, 1 << 9) | @as(u64, 1 << 10);
+    asm volatile ("mov %[in], %%cr4"
+        :
+        : [in] "r" (cr4),
+        : "memory");
+}
 
 /// Early BSP init: GDT, IDT, disable PIC. Does NOT touch LAPIC (needs MMIO mapping first).
 pub fn cpu_init_bsp() void {
-    gdt.init();
+    const apic_id = lapic.id();
+    var rsp: u64 = 0;
+    asm volatile ("mov %%rsp, %[out]"
+        : [out] "=r" (rsp),
+    );
+    gdt.init_bsp(apic_id, @intCast(rsp));
     idt.init();
+    enableSse();
     pic.disable();
 }
 
-pub fn cpu_init_ap() void {
-    gdt.init();
-    idt.init();
+pub fn cpu_init_ap(stack_top: usize) void {
     lapic.init();
+    const apic_id = lapic.id();
+    gdt.init_ap(apic_id, stack_top);
+    idt.init();
+    enableSse();
 }
 
 pub fn cpu_id() usize {
@@ -45,7 +78,7 @@ pub fn cpu_arch_data() common.ArchCpuData {
     var data: common.ArchCpuData = .{};
     const p = Packed{
         .apic_id = lapic.id(),
-        .tss_ptr = @intFromPtr(gdt.get_tss()),
+        .tss_ptr = @intFromPtr(gdt.get_tss(@intCast(lapic.id()))),
     };
 
     const src: [*]const u8 = @ptrCast(&p);

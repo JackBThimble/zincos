@@ -6,6 +6,7 @@ pub const SPURIOUS_VECTOR: u8 = 0xff;
 
 const IA32_APIC_BASE_MSR = 0x1b;
 const APIC_ENABLE = 1 << 11;
+const X2APIC_ENABLE = 1 << 10;
 
 /// Default LAPIC physical base address (can be relocated via MSR)
 pub const LAPIC_BASE: u64 = 0xfee0_0000;
@@ -24,13 +25,31 @@ const LVT_PERIODIC: u32 = 1 << 17;
 
 /// Virtual address of LAPIC registers (set after MMIO mapping)
 var lapic_virt: usize = LAPIC_BASE; // Default to identity-mapped for early boot
+var x2apic_enabled: bool = false;
+
+inline fn x2apicMsr(reg: usize) u32 {
+    return @as(u32, @intCast(0x800 + (reg >> 4)));
+}
+
+inline fn x2apicRead(reg: usize) u32 {
+    return @truncate(msr.rdmsr(x2apicMsr(reg)));
+}
+
+inline fn x2apicWrite(reg: usize, val: u32) void {
+    msr.wrmsr(x2apicMsr(reg), val);
+}
 
 inline fn read(reg: usize) u32 {
+    if (x2apic_enabled) return x2apicRead(reg);
     return @as(*volatile u32, @ptrFromInt(lapic_virt + reg)).*;
 }
 
 inline fn write(reg: usize, val: u32) void {
-    @as(*volatile u32, @ptrFromInt(lapic_virt + reg)).* = val;
+    if (x2apic_enabled) {
+        x2apicWrite(reg, val);
+    } else {
+        @as(*volatile u32, @ptrFromInt(lapic_virt + reg)).* = val;
+    }
 }
 
 // ------------------------------
@@ -39,11 +58,18 @@ inline fn write(reg: usize, val: u32) void {
 /// Initialize the LAPIC. Must be called AFTER mmio_init() has mapped the LAPIC region.
 pub fn init() void {
     // Enable LAPIC via MSR
-    const base = msr.rdmsr(IA32_APIC_BASE_MSR);
-    msr.wrmsr(IA32_APIC_BASE_MSR, base | APIC_ENABLE);
+    var base = msr.rdmsr(IA32_APIC_BASE_MSR);
+    // Prefer xAPIC MMIO if possible, but fall back to x2APIC MSR mode when enabled
+    if ((base & X2APIC_ENABLE) != 0) {
+        base &= ~@as(u64, X2APIC_ENABLE);
+    }
+    base |= APIC_ENABLE;
+    msr.wrmsr(IA32_APIC_BASE_MSR, base);
+    const base_after = msr.rdmsr(IA32_APIC_BASE_MSR);
+    x2apic_enabled = (base_after & X2APIC_ENABLE) != 0;
 
     // Use identity-mapped virtual address (same as physical for LAPIC)
-    lapic_virt = @intCast(base & 0xffff_f000);
+    lapic_virt = @intCast(base_after & 0xffff_f000);
 
     write(REG_SVR, @as(u32, SPURIOUS_VECTOR) | 0x100);
 }
@@ -52,6 +78,7 @@ pub fn init() void {
 // CPU ID
 // ----------------------------
 pub fn id() u32 {
+    if (x2apic_enabled) return x2apicRead(REG_ID);
     return read(REG_ID) >> 24;
 }
 
@@ -104,30 +131,55 @@ const ICR_TRIGGER_LEVEL: u32 = 0x8000;
 
 /// Wait for ICR to be ready (delivery status bit clear)
 fn icrWait() void {
+    if (x2apic_enabled) {
+        while ((msr.rdmsr(0x830) & (1 << 12)) != 0) {
+            asm volatile ("pause");
+        }
+        return;
+    }
     while ((read(REG_ICR_LOW) & (1 << 12)) != 0) {
         asm volatile ("pause");
     }
 }
 
+fn sendIcrX2(apic_id: u32, delivery: u32, vector: u8, level: u32, trigger: u32) void {
+    const icr: u64 =
+        (@as(u64, apic_id) << 32) |
+        (@as(u64, delivery & 0x7) << 8) |
+        @as(u64, vector) |
+        (@as(u64, level & 0x1) << 14) |
+        (@as(u64, trigger & 0x1) << 15);
+    msr.wrmsr(0x830, icr);
+}
+
 /// Send a generic IPI
 pub fn sendIpi(apic_id: u32, vector: u8) void {
     icrWait();
-    write(REG_ICR_HIGH, apic_id << 24);
-    write(REG_ICR_LOW, vector);
+    if (x2apic_enabled) {
+        sendIcrX2(apic_id, 0, vector, 0, 0);
+    } else {
+        write(REG_ICR_HIGH, apic_id << 24);
+        write(REG_ICR_LOW, vector);
+    }
 }
 
 /// Send INIT IPI to target AP
 pub fn sendInit(apic_id: u32) void {
     icrWait();
-    write(REG_ICR_HIGH, apic_id << 24);
-    // INIT, level triggered, assert
-    write(REG_ICR_LOW, ICR_INIT | ICR_LEVEL_ASSERT | ICR_TRIGGER_LEVEL);
+    if (x2apic_enabled) {
+        // INIT (assert). Deassert not required in x2APIC.
+        sendIcrX2(apic_id, 0b101, 0, 1, 1);
+    } else {
+        write(REG_ICR_HIGH, apic_id << 24);
+        // INIT, level triggered, assert
+        write(REG_ICR_LOW, ICR_INIT | ICR_LEVEL_ASSERT | ICR_TRIGGER_LEVEL);
 
-    icrWait();
+        icrWait();
 
-    // INIT, level triggered, deassert
-    write(REG_ICR_HIGH, apic_id << 24);
-    write(REG_ICR_LOW, ICR_INIT | ICR_LEVEL_DEASSERT | ICR_TRIGGER_LEVEL);
+        // INIT, level triggered, deassert
+        write(REG_ICR_HIGH, apic_id << 24);
+        write(REG_ICR_LOW, ICR_INIT | ICR_LEVEL_DEASSERT | ICR_TRIGGER_LEVEL);
+    }
 
     icrWait();
 }
@@ -135,8 +187,12 @@ pub fn sendInit(apic_id: u32) void {
 /// Send Startup IPI (SIPI) to target AP with vector (physical page number of trampoline)
 pub fn sendStartup(apic_id: u32, vector: u8) void {
     icrWait();
-    write(REG_ICR_HIGH, apic_id << 24);
-    write(REG_ICR_LOW, ICR_STARTUP | @as(u32, vector));
+    if (x2apic_enabled) {
+        sendIcrX2(apic_id, 0b110, vector, 0, 0);
+    } else {
+        write(REG_ICR_HIGH, apic_id << 24);
+        write(REG_ICR_LOW, ICR_STARTUP | @as(u32, vector));
+    }
     icrWait();
 }
 

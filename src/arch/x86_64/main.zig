@@ -19,7 +19,11 @@ pub fn halt_catch_fire() noreturn {
 
 pub fn early_init() void {
     idt.init();
-    gdt.init();
+    var rsp: u64 = 0;
+    asm volatile ("mov %%rsp, %[out]"
+        : [out] "=r" (rsp),
+    );
+    gdt.init_bsp(lapic.id(), @intCast(rsp));
     pic.disable();
     lapic.init();
     lapic.timer_init_periodic(10_000_000);

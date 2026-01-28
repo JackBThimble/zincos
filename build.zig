@@ -228,20 +228,20 @@ pub fn build(b: *std.Build) void {
     // ==========================================================================
     const qemu_args = [_][]const u8{
         "qemu-system-x86_64",
+        "-enable-kvm",
+        "-no-reboot",
+        "-cpu",
+        "host",
+        "-serial",
+        "stdio",
         "-m",
         "1G",
-        "-smp",
-        "4",
         "-bios",
         "/usr/share/ovmf/x64/OVMF.4m.fd",
         "-drive",
         b.fmt("file=fat:rw:{s}/{s},format=raw", .{ b.install_path, out_dir_name }),
-        "-serial",
-        "mon:stdio",
-        "-no-reboot",
-        "-enable-kvm",
-        "-cpu",
-        "host",
+        "-smp",
+        "4",
     };
 
     const debug_qemu_args = [_][]const u8{
@@ -257,11 +257,14 @@ pub fn build(b: *std.Build) void {
         "-serial",
         "mon:stdio",
         "-no-reboot",
+        "-no-shutdown",
         "-S",
         "-gdb",
         "tcp::1234",
         "-cpu",
         "qemu64",
+        "-d",
+        "cpu_reset,int,guest_errors",
     };
 
     // =========================================================================

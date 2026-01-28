@@ -71,7 +71,7 @@ export fn ap_main(stack_top: usize) callconv(.c) noreturn {
     magic_ptr.* = AP_MAGIC_VALUE;
 
     // Per-CPU arch init for AP (GDT, IDT, LAPIC)
-    arch.cpu_init_ap();
+    arch.cpu_init_ap(stack_top);
 
     const cpu_id = lapic.id();
 
@@ -131,7 +131,7 @@ fn writeParams(apic_id: u32) void {
     );
 
     // Copy GDTR from BSP's GDT
-    const bsp_gdtr = gdt.gdt_ptr();
+    const bsp_gdtr = gdt.gdt_ptr(@intCast(lapic.id()));
 
     params.* = .{
         .cr3 = cr3,
@@ -171,6 +171,8 @@ pub fn init() void {
         ap_count += 1;
 
         log.debug("[SMP] Waking AP {}", .{apic_id});
+        // Clear magic marker for this AP attempt
+        @as(*volatile u64, @ptrFromInt(AP_MAGIC_ADDR)).* = 0;
         writeParams(apic_id);
 
         // Debug: print params

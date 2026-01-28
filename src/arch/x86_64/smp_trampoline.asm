@@ -15,6 +15,12 @@ ORG 0x7000
 %define OFF_ENTRY       24
 %define OFF_STACK_TOP   32
 
+; Temp GDT selectors
+%define SEL_CODE32 0x08
+%define SEL_DATA32 0x10
+%define SEL_CODE64 0x18
+%define SEL_DATA64 0x20
+
 BITS 16
 trampoline_start:
         cli
@@ -25,7 +31,6 @@ trampoline_start:
         mov ds, ax
         mov es, ax
         mov ss, ax
-
         ; Load temporary GDT
         lgdt [temp_gdtr]
 
@@ -35,12 +40,12 @@ trampoline_start:
         mov cr0, eax
 
         ; Far jump to 32-bit protected mode
-        jmp dword 0x08:pm32_entry
+        jmp dword SEL_CODE32:pm32_entry
 
 BITS 32
 pm32_entry:
         ; Set up 32-bit data segments
-        mov ax, 0x10
+        mov ax, SEL_DATA32
         mov ds, ax
         mov es, ax
         mov ss, ax
@@ -65,17 +70,14 @@ pm32_entry:
         or eax, (1 << 31)
         mov cr0, eax
 
-        ; Load 64-bit GDT from params
-        lgdt [PARAMS_PHYS + OFF_GDT_LIMIT]
-
-        ; Far jump to 64-bit mode
-        jmp dword 0x08:lm64_entry
+        ; Far jump to 64-bit mode using temp GDT 64-bit code descriptor
+        jmp dword SEL_CODE64:lm64_entry
 
 BITS 64
 DEFAULT ABS
 lm64_entry:
-        ; Load 64-bit data segments
-        mov ax, 0x10
+        ; Load 64-bit data segments (temp GDT)
+        mov ax, SEL_DATA64
         mov ds, ax
         mov es, ax
         mov ss, ax
@@ -84,12 +86,38 @@ lm64_entry:
         mov gs, ax
 
         ; Load stack from params
-        mov rax, [PARAMS_PHYS + OFF_STACK_TOP]
-        mov rsp, rax
-        mov rbp, rax
+        mov rbx, [PARAMS_PHYS + OFF_STACK_TOP]
+        mov rsp, rbx
+        mov rbp, rbx
+
+        ; Enable SSE (OSFXSR + OSXMMEXCPT) and clear EM
+        mov rax, cr0
+        and rax, ~(1 << 2)        ; clear EM
+        or rax, (1 << 1) | (1 << 5) ; set MP, NE
+        mov cr0, rax
+
+        mov rax, cr4
+        or rax, (1 << 9) | (1 << 10) ; OSFXSR | OSXMMEXCPT
+        mov cr4, rax
+
+        ; Load real GDT (64-bit base) from params and switch to its code segment
+        lgdt [PARAMS_PHYS + OFF_GDT_LIMIT]
+        push qword 0x08
+        lea rax, [rel .after_real_gdt]
+        push rax
+        retfq
+
+.after_real_gdt:
+        mov ax, 0x10
+        mov ds, ax
+        mov es, ax
+        mov ss, ax
+        xor ax, ax
+        mov fs, ax
+        mov gs, ax
 
         ; Call entry(stack_top)
-        mov rdi, rax
+        mov rdi, rbx
         mov rax, [PARAMS_PHYS + OFF_ENTRY]
         call rax
 
@@ -102,8 +130,10 @@ lm64_entry:
 align 8
 temp_gdt:
         dq 0x0000000000000000   ; Null
-        dq 0x00CF9A000000FFFF   ; 32-bit code
-        dq 0x00CF92000000FFFF   ; 32-bit data
+        dq 0x00CF9A000000FFFF   ; 32-bit code (SEL_CODE32)
+        dq 0x00CF92000000FFFF   ; 32-bit data (SEL_DATA32)
+        dq 0x00AF9A000000FFFF   ; 64-bit code (SEL_CODE64)
+        dq 0x00CF92000000FFFF   ; data (SEL_DATA64)
 temp_gdt_end:
 
 temp_gdtr:

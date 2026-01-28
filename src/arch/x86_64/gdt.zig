@@ -1,3 +1,5 @@
+const std = @import("std");
+
 // GDT Entry structure (8 bytes)
 const GDTEntry = packed struct {
     limit_low: u16,
@@ -44,6 +46,8 @@ const GDTR = packed struct {
     base: u64,
 };
 
+const common = @import("common");
+
 const Access = struct {
     const present: u8 = 1 << 7;
     const ring_0: u8 = 0 << 5;
@@ -66,16 +70,16 @@ const Flags = struct {
 
 // GDT with 6 entries + TSS descriptor (takes 2 slots, 7 total)
 // Layout: null, kernel code, kernel data, user code, user data, TSS (16 bytes)
-var gdt: [7]u64 align(16) = undefined;
-var gdtr: GDTR = undefined;
-var tss: TSS align(16) = undefined;
+var gdt: [common.MAX_CPUS][7]u64 align(16) = undefined;
+var gdtr: [common.MAX_CPUS]GDTR = undefined;
+var tss: [common.MAX_CPUS]TSS align(16) = undefined;
 
 // Stack for ring 0 (kernel stack for syscalls)
-var kernel_stack: [4096 * 4]u8 align(16) = undefined;
+var kernel_stack: [common.MAX_CPUS][4096 * 4]u8 align(16) = undefined;
 
 // IST stacks (for critical interrupts like double faults)
-var double_fault_stack: [4096 * 4]u8 align(16) = undefined;
-var nmi_stack: [4096 * 4]u8 align(16) = undefined;
+var double_fault_stack: [common.MAX_CPUS][4096 * 4]u8 align(16) = undefined;
+var nmi_stack: [common.MAX_CPUS][4096 * 4]u8 align(16) = undefined;
 
 fn createGDTEntry(base: u32, limit: u32, access: u8, flags: u8) u64 {
     var entry: u64 = 0;
@@ -90,7 +94,7 @@ fn createGDTEntry(base: u32, limit: u32, access: u8, flags: u8) u64 {
     return entry;
 }
 
-fn createTSSDescriptor(tss_ptr: *TSS) void {
+fn createTSSDescriptor(gdt_table: *[7]u64, tss_ptr: *TSS) void {
     const base = @intFromPtr(tss_ptr);
     const limit = @sizeOf(TSS) - 1;
 
@@ -111,16 +115,21 @@ fn createTSSDescriptor(tss_ptr: *TSS) void {
 
     const upper: u64 = (base >> 32) & 0xffffffff;
 
-    gdt[5] = lower;
-    gdt[6] = upper;
+    gdt_table[5] = lower;
+    gdt_table[6] = upper;
 }
 
-pub fn init() void {
+fn initForCpu(cpu_id: usize, stack_top: usize) void {
+    std.debug.assert(cpu_id < common.MAX_CPUS);
+
+    var gdt_table: *[7]u64 = &gdt[cpu_id];
+    const stack_top_u64: u64 = @intCast(stack_top);
+
     // Null descriptor
-    gdt[0] = 0;
+    gdt_table[0] = 0;
 
     // Kernel code segment (0x08)
-    gdt[1] = createGDTEntry(
+    gdt_table[1] = createGDTEntry(
         0,
         0xfffff,
         Access.present | Access.ring_0 | Access.code_data | Access.executable | Access.readable,
@@ -128,7 +137,7 @@ pub fn init() void {
     );
 
     // Kernel data segment (0x10)
-    gdt[2] = createGDTEntry(
+    gdt_table[2] = createGDTEntry(
         0,
         0xfffff,
         Access.present | Access.ring_0 | Access.code_data | Access.writable,
@@ -136,7 +145,7 @@ pub fn init() void {
     );
 
     // User code segment (0x18)
-    gdt[3] = createGDTEntry(
+    gdt_table[3] = createGDTEntry(
         0,
         0xfffff,
         Access.present | Access.ring_3 | Access.code_data | Access.executable | Access.readable,
@@ -144,7 +153,7 @@ pub fn init() void {
     );
 
     // User data segment (0x20)
-    gdt[4] = createGDTEntry(
+    gdt_table[4] = createGDTEntry(
         0,
         0xfffff,
         Access.present | Access.ring_3 | Access.code_data | Access.writable,
@@ -152,35 +161,43 @@ pub fn init() void {
     );
 
     // Initialize TSS
-    @memset(@as([*]u8, @ptrCast(&tss))[0..@sizeOf(TSS)], 0);
+    @memset(@as([*]u8, @ptrCast(&tss[cpu_id]))[0..@sizeOf(TSS)], 0);
 
     // Set ring 0 stack pointer (top of stack, grows downward)
-    tss.rsp0 = @intFromPtr(&kernel_stack) + kernel_stack.len;
+    tss[cpu_id].rsp0 = stack_top_u64;
 
     // Set up IST entries for critical interrupts
     // IST1 for double faults
-    tss.ist1 = @intFromPtr(&double_fault_stack) + double_fault_stack.len;
+    tss[cpu_id].ist1 = @intFromPtr(&double_fault_stack[cpu_id]) + double_fault_stack[cpu_id].len;
 
     // IST2 for NMI
-    tss.ist2 = @intFromPtr(&nmi_stack) + nmi_stack.len;
+    tss[cpu_id].ist2 = @intFromPtr(&nmi_stack[cpu_id]) + nmi_stack[cpu_id].len;
 
     // I/O map base (no I/O bitmap, set to size of TSS)
-    tss.iomap_base = @sizeOf(TSS);
+    tss[cpu_id].iomap_base = @sizeOf(TSS);
 
     // Create TSS descriptor (takes slots 5 and 6)
-    createTSSDescriptor(&tss);
+    createTSSDescriptor(gdt_table, &tss[cpu_id]);
 
-    gdtr.limit = @sizeOf(@TypeOf(gdt)) - 1;
-    gdtr.base = @intFromPtr(&gdt);
+    gdtr[cpu_id].limit = @sizeOf(@TypeOf(gdt_table.*)) - 1;
+    gdtr[cpu_id].base = @intFromPtr(gdt_table);
 
-    lgdt();
+    lgdt(&gdtr[cpu_id]);
     ltss();
+}
+
+pub fn init_bsp(cpu_id: usize, stack_top: usize) void {
+    initForCpu(cpu_id, stack_top);
+}
+
+pub fn init_ap(cpu_id: usize, stack_top: usize) void {
+    initForCpu(cpu_id, stack_top);
 }
 
 extern fn gdt_load_and_jump(gdtr_ptr: *const GDTR) callconv(.{ .x86_64_sysv = .{} }) void;
 
-fn lgdt() void {
-    gdt_load_and_jump(&gdtr);
+fn lgdt(gdtr_ptr: *const GDTR) void {
+    gdt_load_and_jump(gdtr_ptr);
 }
 
 fn ltss() void {
@@ -191,16 +208,19 @@ fn ltss() void {
 }
 
 // Helper function to update RSP0 (call this when switching tasks/processes)
-pub fn setKernelStack(stack_top: u64) void {
-    tss.rsp0 = stack_top;
+pub fn setKernelStack(cpu_id: usize, stack_top: usize) void {
+    std.debug.assert(cpu_id < common.MAX_CPUS);
+    tss[cpu_id].rsp0 = @intCast(stack_top);
 }
 
 /// Get pointer to GDTR for AP trampoline
-pub fn gdt_ptr() *const GDTR {
-    return &gdtr;
+pub fn gdt_ptr(cpu_id: usize) *const GDTR {
+    std.debug.assert(cpu_id < common.MAX_CPUS);
+    return &gdtr[cpu_id];
 }
 
 /// Get pointer to TSS (for per-CPU data)
-pub fn get_tss() *TSS {
-    return &tss;
+pub fn get_tss(cpu_id: usize) *TSS {
+    std.debug.assert(cpu_id < common.MAX_CPUS);
+    return &tss[cpu_id];
 }

@@ -15,7 +15,8 @@ pub fn cpu_init_bsp() void {
     // TODO: exception vectors, MMU, GIC init
 }
 
-pub fn cpu_init_ap() void {
+pub fn cpu_init_ap(stack_top: usize) void {
+    _ = stack_top;
     // TODO: per-core init
 }
 
