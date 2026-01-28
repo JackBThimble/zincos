@@ -32,6 +32,18 @@ const cpu_local = @import("cpu_local.zig");
 const fb = @import("graphics/framebuffer.zig");
 
 // ============================================================================
+// AP Entry Point (called when APs are released from parking)
+// ============================================================================
+fn apEntry(stack_top: usize) callconv(.c) noreturn {
+    const cpu_id = arch.cpu_id();
+    log.info("[AP{}] Entered scheduler, stack=0x{x}", .{ cpu_id, stack_top });
+
+    // TODO: Enter scheduler loop
+    // For now, just halt
+    arch.halt_catch_fire();
+}
+
+// ============================================================================
 // Kernel Entry Point
 // ============================================================================
 
@@ -133,15 +145,20 @@ export fn _start(boot_info: *BootInfo) callconv(.{ .x86_64_sysv = .{} }) noretur
         fa.frame_count - fa.used_frames,
     });
 
-    var mapper = vmm.Mapper{
+    // Create arch-specific mapper context
+    var mapper_ctx = arch.mm.MapperCtx{
         .hhdm_base = g_boot_info.hhdm_base,
         .fa = &fa,
     };
+    const mapper = mapper_ctx.mapper();
+
+    // Map arch-specific MMIO regions and initialize hardware (LAPIC/GIC, etc.)
+    arch.mmio_init(mapper);
 
     // Kernel heap: 512MB virtual region starting at 0xFFFFC00000000000
     const HEAP_BASE: u64 = 0xFFFF_C000_0000_0000;
     const HEAP_SIZE: u64 = 512 * 1024 * 1024;
-    var heap = kheap.KHeap.init(&mapper, HEAP_BASE, HEAP_SIZE);
+    var heap = kheap.KHeap.init(mapper, HEAP_BASE, HEAP_SIZE);
     log.debug("Heap initialized at 0x{x}, size {} MB", .{ HEAP_BASE, HEAP_SIZE / (1024 * 1024) });
 
     // Run stress test to validate allocator
@@ -151,15 +168,16 @@ export fn _start(boot_info: *BootInfo) callconv(.{ .x86_64_sysv = .{} }) noretur
     heap.dumpStats();
 
     // =========================================================================
-    // TODO: SMP Bring-up
+    // SMP Bring-up
     // =========================================================================
-    // 1. Parse ACPI MADT to find AP processor IDs
-    // 2. Allocate per-CPU stacks (e.g., 16KB each)
-    // 3. Set up AP trampoline code in low memory
-    // 4. Send INIT-SIPI-SIPI sequence to wake APs
-    // 5. Each AP initializes its own GDT/IDT/TSS
+    // Set AP entry point (called when APs are released from parking)
+    arch.smp_set_ap_entry(apEntry);
 
-    log.info("Kernel initialization complete. Halting.", .{});
+    // Bring up APs and park them
+    arch.smp_init();
+
+    log.info("Kernel initialization complete. {} APs parked.", .{arch.smp_ap_count()});
+    log.info("Halting BSP.", .{});
 
     halt();
 }

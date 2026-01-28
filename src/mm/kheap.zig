@@ -4,6 +4,9 @@ const vmm = @import("vmm.zig");
 const builtin = @import("builtin");
 const log = @import("common").log;
 
+/// Flags for heap pages: writable, not executable
+const HEAP_PAGE_FLAGS = vmm.MapFlags{ .writable = true };
+
 pub const KHeap = struct {
     pub const ALIGN_MIN: usize = 16;
     pub const BACKPTR_SIZE: usize = @sizeOf(usize);
@@ -19,7 +22,7 @@ pub const KHeap = struct {
     // Enable expensive checks in debug/safe builds
     const DEBUG_CHECKS = builtin.mode == .Debug or builtin.mode == .ReleaseSafe;
 
-    mapper: *vmm.Mapper,
+    mapper: vmm.Mapper,
 
     base: u64, // heap virtual base (page aligned)
     size: u64, // heap virtual size (page aligned)
@@ -232,7 +235,7 @@ pub const KHeap = struct {
         const old_mapped_end = self.mapped_end;
 
         while (self.mapped_end < want_end) : (self.mapped_end += pmm.PAGE_SIZE) {
-            const frame = self.mapper.fa.allocFrame() orelse {
+            const frame = self.mapper.allocFrame() orelse {
                 // Restore wilderness if we failed partway through
                 if (!wilderness_consumed and self.mapped_end > old_mapped_end) {
                     // Grew some pages, update wilderness size
@@ -247,12 +250,7 @@ pub const KHeap = struct {
                 return false;
             };
 
-            var flags: u64 = 0;
-            flags |= vmm.PTE_PRESENT;
-            flags |= vmm.PTE_WRITABLE;
-            flags |= vmm.PTE_NX;
-
-            self.mapper.map4k(self.mapped_end, frame, flags);
+            self.mapper.map4k(self.mapped_end, frame, HEAP_PAGE_FLAGS);
         }
 
         if (wilderness_consumed) {
@@ -364,7 +362,7 @@ pub const KHeap = struct {
     // ========================================
     // Public API
     // ========================================
-    pub fn init(mapper: *vmm.Mapper, heap_base: u64, heap_size: u64) KHeap {
+    pub fn init(mapper: vmm.Mapper, heap_base: u64, heap_size: u64) KHeap {
         std.debug.assert((heap_size & (pmm.PAGE_SIZE - 1)) == 0);
         std.debug.assert((heap_base & (pmm.PAGE_SIZE - 1)) == 0);
 
@@ -381,14 +379,8 @@ pub const KHeap = struct {
         const initial_pages = alignUpU64(minBlockSize(), pmm.PAGE_SIZE);
         var mapped: u64 = 0;
         while (mapped < initial_pages) : (mapped += pmm.PAGE_SIZE) {
-            const frame = mapper.fa.allocFrame() orelse @panic("[KHeap.init] Failed to allocate initial frame");
-
-            var flags: u64 = 0;
-            flags |= vmm.PTE_PRESENT;
-            flags |= vmm.PTE_WRITABLE;
-            flags |= vmm.PTE_NX;
-
-            mapper.map4k(heap_base + mapped, frame, flags);
+            const frame = mapper.allocFrame() orelse @panic("[KHeap.init] Failed to allocate initial frame");
+            mapper.map4k(heap_base + mapped, frame, HEAP_PAGE_FLAGS);
         }
         self.mapped_end = heap_base + mapped;
 

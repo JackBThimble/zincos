@@ -1,4 +1,5 @@
 const common = @import("common");
+const vmm = @import("mm").vmm;
 
 var ap_entry_fn: ?common.ApEntryFn = null;
 
@@ -49,10 +50,18 @@ pub fn cpu_arch_data() common.ArchCpuData {
 
 pub fn smp_init() void {
     // TODO: PSCI CPU_ON or platform method.
-    // When implemented, you’ll call ap_entry_fn once AP is in EL1 with stack.
+    // When implemented, you'll call ap_entry_fn once AP is in EL1 with stack.
 }
 
-pub fn smp_send_ipi(_: usize) void {
+pub fn smp_ap_count() u32 {
+    return 0; // TODO
+}
+
+pub fn smp_release_aps() void {
+    // TODO
+}
+
+pub fn smp_send_ipi(_: usize, _: u8) void {
     // TODO: GIC SGI
 }
 
@@ -71,4 +80,35 @@ pub fn halt() void {
 
 pub fn halt_catch_fire() noreturn {
     while (true) asm volatile ("wfi");
+}
+
+/// Map architecture-specific MMIO regions and initialize hardware.
+/// On AArch64: maps and initializes GIC, timers, etc.
+pub fn mmio_init(mapper: vmm.Mapper) void {
+    _ = mapper;
+    // TODO: Map GIC distributor/redistributor MMIO regions
+    // TODO: Initialize GIC
+    // TODO: Map and init ARM generic timer
+}
+
+pub fn timer_init() void {
+    // TODO: ARM generic timer init
+}
+
+pub fn dumpCpuState() void {
+    // TODO: dump ARM registers
+}
+
+pub fn now() usize {
+    // Read CNTPCT_EL0 (physical counter)
+    var cnt: u64 = 0;
+    asm volatile ("mrs %0, cntpct_el0"
+        : [_] "=r" (cnt),
+    );
+    return @intCast(cnt);
+}
+
+pub fn set_deadline(delta_ticks: u64) void {
+    _ = delta_ticks;
+    // TODO: Set CNTP_TVAL_EL0 for timer interrupt
 }

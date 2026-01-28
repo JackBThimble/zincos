@@ -2,6 +2,8 @@ const std = @import("std");
 
 const common = @import("common");
 
+const vmm = @import("mm").vmm;
+
 const gdt = @import("gdt.zig");
 const idt = @import("interrupts/idt.zig");
 const lapic = @import("lapic.zig");
@@ -12,11 +14,11 @@ const tsc = @import("tsc");
 
 // --- CPU + init ---
 
+/// Early BSP init: GDT, IDT, disable PIC. Does NOT touch LAPIC (needs MMIO mapping first).
 pub fn cpu_init_bsp() void {
     gdt.init();
     idt.init();
     pic.disable();
-    lapic.init();
 }
 
 pub fn cpu_init_ap() void {
@@ -42,7 +44,7 @@ pub fn cpu_arch_data() common.ArchCpuData {
 
     var data: common.ArchCpuData = .{};
     const p = Packed{
-        .apic_id = lapic.readId(),
+        .apic_id = lapic.id(),
         .tss_ptr = @intFromPtr(gdt.get_tss()),
     };
 
@@ -61,6 +63,14 @@ pub fn smp_init() void {
     smp.init();
 }
 
+pub fn smp_ap_count() u32 {
+    return smp.getOnlineApCount();
+}
+
+pub fn smp_release_aps() void {
+    smp.releaseAps();
+}
+
 pub fn smp_set_ap_entry(entry: common.ApEntryFn) void {
     ap_entry_fn = entry;
 }
@@ -69,8 +79,8 @@ pub fn smp_get_ap_entry() common.ApEntryFn {
     return ap_entry_fn orelse @panic("[arch] AP entry not set");
 }
 
-pub fn smp_send_ipi(cpu: usize) void {
-    lapic.sendIPI(@intCast(cpu));
+pub fn smp_send_ipi(cpu: usize, vector: u8) void {
+    lapic.sendIpi(@intCast(cpu), vector);
 }
 
 // ---- IRQ control ----
@@ -130,4 +140,30 @@ pub fn now() usize {
 
 pub fn set_deadline(delta_ticks: u64) void {
     lapic.timer_set_oneshot(@truncate(delta_ticks));
+}
+
+/// Map architecture-specific MMIO regions and initialize hardware.
+/// On x86_64: maps and initializes LAPIC, IOAPIC, HPET, etc.
+pub fn mmio_init(mapper: vmm.Mapper) void {
+    const mmio_flags = vmm.MapFlags.mmio;
+
+    // LAPIC - identity map at physical 0xfee00000
+    // TODO: Could read actual base from MSR and map dynamically
+    mapper.map4k(lapic.LAPIC_BASE, lapic.LAPIC_BASE, mmio_flags);
+
+    // Now that LAPIC is mapped, initialize it
+    lapic.init();
+
+    // Calibrate TSC for delay functions
+    lapic.calibrateTsc();
+
+    // SMP trampoline region - identity map low memory for AP boot
+    // Trampoline at 0x7000, params at 0x7800 (both in same 4K page)
+    const smp_trampoline_page: u64 = 0x7000;
+    mapper.map4k(smp_trampoline_page, smp_trampoline_page, .{ .writable = true, .executable = true });
+
+    // TODO: IOAPIC at 0xfec00000
+    // mapper.map4k(0xfec00000, 0xfec00000, mmio_flags);
+
+    // TODO: HPET (address from ACPI)
 }

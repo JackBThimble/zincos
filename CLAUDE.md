@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ZincOS is a custom x86_64 OS hybrid microkernel written in Zig with NASM assembly for low-level CPU operations. It boots via UEFI and runs a freestanding kernel with its own memory management.
 
+**Hybrid MicroKernel**
+This is intended to be a minimal-ish hybrid microkernel design. Exceptions will be made for performance critical
+paths such as graphics. 
+
 ## Build Commands
 
 ```bash
@@ -27,7 +31,7 @@ ArmV8 Support will be added next.
 1. **UEFI Bootloader** (`src/boot/main.zig`): Initializes graphics, loads kernel ELF from `\efi\ZincOS`, builds page tables with HHDM, exits boot services, jumps to kernel
 2. **Kernel Entry** (`src/kernel/main.zig`): Validates boot magic, initializes GDT/IDT, sets up PMM/VMM/heap, runs allocator stress tests
 
-### X86_64 
+### X86_64 (`src/arch/x86_64/`)
 **Interrupts**
 - `interrupts/idt.zig` - Sets up interrupt handlers
 - `interrupts/isr.asm` - ISR/IRQ stubs and handlers
@@ -53,7 +57,10 @@ ArmV8 Support will be added next.
 - TODO: SMP Bring up, AP initialization
 - TODO: Per-cpu*
 
-### Memory Layout
+### Aarch64 (`src/arch/aarch64`)
+- TODO: Add arm support
+
+### Memory Layout (x64)
 - **Kernel virtual base**: `0xFFFFFFFF80000000` (higher-half)
 - **HHDM base**: `0xFFFF800000000000` (direct map of physical memory)
 - **Heap region**: `0xFFFFC00000000000+`
@@ -61,17 +68,33 @@ ArmV8 Support will be added next.
 
 ### Key Components
 
-**Memory Management** (`src/kernel/mm/`):
+**Memory Management** (`src/mm/`):
 - `pmm.zig` - Bitmap-based physical frame allocator (4KB pages)
-- `vmm.zig` - 4-level page table walker with map/unmap operations
-- `kalloc.zig` - Free-list allocator with coalescing and splitting
-- `kheap.zig` - Interim redesign of kalloc.zig free-list allocator for a basic kernel allocator
-- `heap.zig` - Linear page allocator backing kalloc
+- `vmm.zig` - Arch-agnostic `MapFlags` and `Mapper` interface (vtable). No arch-specific code here.
+- `kheap.zig` - Kernel heap allocator using the `Mapper` interface
+- `debug.zig` - Stress test for kernel heap allocator
 
-**Architecture** (`src/arch/x86_64/`):
-- `gdt.zig` + `gdt_load.asm` - GDT with TSS and interrupt stacks
-- `interrupts/idt.zig` + `isr.asm` - IDT with 256 interrupt handlers
-- `serial.zig` - COM1 debug output (38400 baud)
+**Memory Abstraction Pattern:**
+The mm module is completely architecture-agnostic. It defines:
+- `vmm.MapFlags` - Arch-agnostic flags (writable, executable, user, device, etc.)
+- `vmm.Mapper` - Interface struct with vtable for map4k, unmap4k, allocFrame, freeFrame
+
+The arch module implements the interface:
+- `arch.mm.MapperCtx` - Arch-specific context (e.g., x86_64 has hhdm_base, frame allocator)
+- `ctx.mapper()` - Returns a `vmm.Mapper` that mm can use without knowing arch details
+- PTE bits and translation are internal to the arch implementation
+
+**Common** (`src/common`) : Functions as a HAL layer that all modules can import
+- `log.zig` - Level-filtering logger (currently supports serial console only)
+- `cpu.zig` - Per-cpu abstraction
+- `boot_info.zig` - Not HAL, but needs to be in central location. Defines all data structures and information passed from the bootloader to the kernel
+
+**Architecture** (`src/arch/`):
+- `arch.zig` - Interface for arch-agnostic kernel to consume
+- `serial.zig` - Interface for logger to print to serial console
+- `mem.zig` - Exports arch-specific `MapperCtx` type (selects x86_64 or aarch64 implementation)
+- `x86_64/vmm.zig` - x86_64 page table implementation, translates `mm.vmm.MapFlags` to PTE bits
+- `aarch64/vmm.zig` - AArch64 page table implementation (stub)
 
 **Bootloader** (`src/boot/`):
 - `loader.zig` - ELF parser for kernel loading
@@ -101,11 +124,12 @@ Assembly files (`*.asm`) are assembled with NASM and linked into the kernel.
 
 ## Design Considerations
 **Namespaces/Modules**
-- `src/boot` - Contains all UEFI application code 
+- `src/boot` - Contains all UEFI application code
 - `src/kernel` - Namespace intended for architecture agnostic component implementation
-- `src/arch` - Module for architecture specific component initialization/implementation
+- `src/arch` - Module for architecture specific component initialization/implementation. This is the ONLY place with `builtin.cpu.arch` switches.
+- `src/mm` - Module for memory management. Completely arch-agnostic; uses interfaces provided by arch.
+- `src/common` - HAL layer for serial, cpu, logging, and boot info definitions
 
-**Hybrid MicroKernel**
-This is intended to be a minimal-ish hybrid microkernel design. Exceptions will be made for performance critical
-paths such as graphics. 
+**Architecture Abstraction Rule:**
+Only `src/arch/` may contain architecture detection logic (`builtin.cpu.arch`). Other modules (mm, kernel) consume interfaces without knowing the underlying architecture.
 

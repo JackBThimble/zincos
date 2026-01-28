@@ -194,3 +194,13 @@ fn ltss() void {
 pub fn setKernelStack(stack_top: u64) void {
     tss.rsp0 = stack_top;
 }
+
+/// Get pointer to GDTR for AP trampoline
+pub fn gdt_ptr() *const GDTR {
+    return &gdtr;
+}
+
+/// Get pointer to TSS (for per-CPU data)
+pub fn get_tss() *TSS {
+    return &tss;
+}

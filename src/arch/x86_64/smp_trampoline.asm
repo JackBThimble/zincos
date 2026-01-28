@@ -1,77 +1,89 @@
-BITS 16
-DEFAULT REL
+; SMP AP Trampoline - Flat Binary
+; Assembled with: nasm -f bin -o smp_trampoline.bin smp_trampoline.asm
+; This code is copied to 0x7000 at runtime and executed by APs
+; It transitions from 16-bit real mode -> 32-bit protected -> 64-bit long mode
 
-global smp_trampoline_start
-global smp_trampoline_end
+ORG 0x7000
 
-; Parameters live at 0x7800 ( must match smp.zig )
+; Parameters live at 0x7800 (must match smp.zig)
 %define PARAMS_PHYS 0x7800
 
-; Offsets in TrampolineParams
+; Offsets in TrampolineParams (must match smp.zig TrampolineParams)
 %define OFF_CR3         0
-%define OFF_GDT_PTR     8
-%define OFF_ENTRY       16
-%define OFF_STACK_TOP   24
+%define OFF_GDT_LIMIT   8   ; u16
+%define OFF_GDT_BASE    10  ; u64
+%define OFF_ENTRY       24
+%define OFF_STACK_TOP   32
 
-smp_trampoline_start:
+BITS 16
+trampoline_start:
         cli
         cld
 
-        ; --- Enter protected mode quickly (minimal) ---
-        ; Load a temporary 16-bit GDT (flat) to enter PM,
-        ; then we'll load the real 64-bit GDT from params.
+        ; Set up segments for real mode (DS=0 so we can access low memory)
+        xor ax, ax
+        mov ds, ax
+        mov es, ax
+        mov ss, ax
+
+        ; Load temporary GDT
         lgdt [temp_gdtr]
 
+        ; Enable protected mode
         mov eax, cr0
         or eax, 1
         mov cr0, eax
 
-        jmp 0x08:pm32_entry
+        ; Far jump to 32-bit protected mode
+        jmp dword 0x08:pm32_entry
 
 BITS 32
 pm32_entry:
+        ; Set up 32-bit data segments
         mov ax, 0x10
         mov ds, ax
         mov es, ax
         mov ss, ax
 
-        ; Enable PAE
+        ; Enable PAE (required for long mode)
         mov eax, cr4
         or eax, (1 << 5)
         mov cr4, eax
 
         ; Load CR3 from params
         mov eax, dword [PARAMS_PHYS + OFF_CR3]
-        mov edx, dword [PARAMS_PHYS + OFF_CR3 + 4]
-        ; write CR3 (only low 32 used in many setups, but keep correctness)
         mov cr3, eax
 
-        ; Enable LME (EFER.LME)
-        mov ecx, 0xC0000080      ; IA32_EFER
+        ; Enable long mode via EFER.LME
+        mov ecx, 0xC0000080
         rdmsr
-        or eax, (1 << 8)         ; LME
+        or eax, (1 << 8)
         wrmsr
 
-        ; Enable paging (CR0.PG)
+        ; Enable paging (activates long mode)
         mov eax, cr0
         or eax, (1 << 31)
         mov cr0, eax
 
         ; Load 64-bit GDT from params
-        lgdt [PARAMS_PHYS + OFF_GDT_PTR]
+        lgdt [PARAMS_PHYS + OFF_GDT_LIMIT]
 
-        ; Far jump to 64-bit code segment (assumes selector 0x08 is 64-bit code)
-        jmp 0x08:lm64_entry
+        ; Far jump to 64-bit mode
+        jmp dword 0x08:lm64_entry
 
 BITS 64
+DEFAULT ABS
 lm64_entry:
-        ; Load data segments (assumes selector 0x10 is data)
+        ; Load 64-bit data segments
         mov ax, 0x10
         mov ds, ax
         mov es, ax
         mov ss, ax
+        xor ax, ax
+        mov fs, ax
+        mov gs, ax
 
-        ; Set stack from params
+        ; Load stack from params
         mov rax, [PARAMS_PHYS + OFF_STACK_TOP]
         mov rsp, rax
         mov rbp, rax
@@ -81,22 +93,21 @@ lm64_entry:
         mov rax, [PARAMS_PHYS + OFF_ENTRY]
         call rax
 
+        ; Should never return
 .hang:
         hlt
         jmp .hang
 
-; --- Temporary GDT to enter protected mode ---
+; Align GDT data
 align 8
 temp_gdt:
-        dq 0x0000000000000000
-        dq 0x00CF9A000000FFFF  ; code
-        dq 0x00CF92000000FFFF  ; data
+        dq 0x0000000000000000   ; Null
+        dq 0x00CF9A000000FFFF   ; 32-bit code
+        dq 0x00CF92000000FFFF   ; 32-bit data
+temp_gdt_end:
 
 temp_gdtr:
         dw temp_gdt_end - temp_gdt - 1
         dd temp_gdt
 
-temp_gdt_end:
-
-smp_trampoline_end:
-
+trampoline_end:

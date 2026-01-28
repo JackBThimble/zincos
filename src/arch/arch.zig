@@ -1,7 +1,9 @@
 const builtin = @import("builtin");
 const common = @import("common");
+const vmm = @import("mm").vmm;
 
 pub const serial = @import("serial.zig");
+pub const mm = @import("mem.zig");
 
 pub const Impl = switch (builtin.cpu.arch) {
     .x86_64 => @import("x86_64/arch_impl.zig"),
@@ -15,10 +17,18 @@ pub fn cpu_id() usize {
     return Impl.cpu_id();
 }
 
-/// Initializes bootstrap processor
-/// x86_64 - IDT, GDT, PIC, LAPIC, etc.
+/// Initializes bootstrap processor (early init: GDT, IDT, etc.)
+/// Does NOT initialize interrupt controllers - call mmio_init() for that.
 pub fn cpu_init_bsp() void {
     return Impl.cpu_init_bsp();
+}
+
+/// Map architecture-specific MMIO regions and initialize hardware.
+/// x86_64: LAPIC, IOAPIC, HPET
+/// AArch64: GIC, timers
+/// Must be called after creating the Mapper.
+pub fn mmio_init(mapper: vmm.Mapper) void {
+    Impl.mmio_init(mapper);
 }
 
 /// Initializes single AP
@@ -55,9 +65,19 @@ pub fn smp_init() void {
     Impl.smp_init();
 }
 
-/// SIPI for SMP
-pub fn smp_send_ipi(cpu: usize) void {
-    Impl.smp_send_ipi(cpu);
+/// Get number of APs currently online and parked
+pub fn smp_ap_count() u32 {
+    return Impl.smp_ap_count();
+}
+
+/// Release all parked APs to enter scheduler
+pub fn smp_release_aps() void {
+    Impl.smp_release_aps();
+}
+
+/// Send IPI to specific CPU
+pub fn smp_send_ipi(cpu: usize, vector: u8) void {
+    Impl.smp_send_ipi(cpu, vector);
 }
 
 /// Initialize timer (for scheduling)

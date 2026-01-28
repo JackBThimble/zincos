@@ -45,6 +45,18 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/common/main.zig"),
     });
 
+    // SMP trampoline as flat binary (no relocations) - must be before arch_module
+    const smp_trampoline_asm = b.addSystemCommand(&.{ "nasm", "-f", "bin", "-o" });
+    const smp_bin = smp_trampoline_asm.addOutputFileArg("smp_trampoline.bin");
+    smp_trampoline_asm.addFileArg(b.path("src/arch/x86_64/smp_trampoline.asm"));
+
+    // Create a wrapper module that embeds the trampoline binary
+    const smp_wrapper = b.addWriteFiles();
+    _ = smp_wrapper.addCopyFile(smp_bin, "smp_trampoline.bin");
+    const smp_embed_zig = smp_wrapper.add("smp_trampoline_embed.zig",
+        \\pub const data: []const u8 = @embedFile("smp_trampoline.bin");
+    );
+
     // Architecture specific
     const arch_module = b.createModule(.{
         .root_source_file = b.path("src/arch/arch.zig"),
@@ -52,6 +64,11 @@ pub fn build(b: *std.Build) void {
             .cpu_arch = .x86_64,
             .os_tag = .freestanding,
         }),
+    });
+
+    // Add trampoline binary wrapper as anonymous import to arch module
+    arch_module.addAnonymousImport("smp_trampoline_bin", .{
+        .root_source_file = smp_embed_zig,
     });
 
     // Memory management module
@@ -213,6 +230,8 @@ pub fn build(b: *std.Build) void {
         "qemu-system-x86_64",
         "-m",
         "1G",
+        "-smp",
+        "4",
         "-bios",
         "/usr/share/ovmf/x64/OVMF.4m.fd",
         "-drive",
@@ -229,6 +248,8 @@ pub fn build(b: *std.Build) void {
         "qemu-system-x86_64",
         "-m",
         "1G",
+        "-smp",
+        "4",
         "-bios",
         "/usr/share/ovmf/x64/OVMF.4m.fd",
         "-drive",
