@@ -70,6 +70,7 @@ export fn _start(boot_info: *BootInfo) callconv(.{ .x86_64_sysv = .{} }) noretur
         :
         : .{});
 
+    log.info("CPU count: {d}", .{g_boot_info.cpu_count});
     log.debug("GDT Initialization: CS=0x{x}  SS=0x{x}", .{ cs, ss });
     // Validate boot info magic
     if (common.g_boot_info.?.magic != BOOT_MAGIC) {

@@ -47,6 +47,7 @@ pub const BootInfo = extern struct {
     kernel_size: u64,
     rsdp_address: u64,
     hhdm_base: u64,
+    cpu_count: u64,
 };
 
 pub const BOOT_MAGIC: u64 = 0xB007_1AF0_DEAD_BEEF;

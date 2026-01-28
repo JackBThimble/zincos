@@ -14,6 +14,7 @@ const loader = @import("loader.zig");
 const memory = @import("memory.zig");
 const paging = @import("paging.zig");
 const acpi = @import("acpi.zig");
+const mp = @import("mp_services.zig");
 
 pub const BootInfo = boot_info.BootInfo;
 pub const FramebufferInfo = boot_info.FramebufferInfo;
@@ -45,6 +46,15 @@ pub fn main() noreturn {
     } else |_| {
         console.println("[!] Graphics setup failed, continuing without framebuffer");
         framebuffer = std.mem.zeroes(boot_info.FramebufferInfo);
+    }
+
+    var cpu_count: u64 = 0;
+    const mps = mp.locate(boot_services) orelse null;
+    if (mps != null) {
+        const summary = mp.getSummary(mps.?) catch unreachable;
+        cpu_count = summary.enabled;
+    } else {
+        cpu_count = 1;
     }
 
     const rsdp_address = acpi.find_rsdp() orelse 0;
@@ -130,6 +140,7 @@ pub fn main() noreturn {
         .memory_map_entries = memory_map_entries,
         .rsdp_address = rsdp_address,
         .hhdm_base = paging.HHDM_BASE,
+        .cpu_count = cpu_count,
     };
 
     exit_boot_services_and_jump(load_result.entry_point, pml4, bootinfo_phys + paging.HHDM_BASE);
