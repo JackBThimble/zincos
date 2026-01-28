@@ -1,1 +1,0 @@
-pub const data: []const u8 = @embedFile("smp_trampoline.bin");
