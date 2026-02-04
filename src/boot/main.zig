@@ -6,12 +6,13 @@ const uefi = std.os.uefi;
 const BootServices = uefi.tables.BootServices;
 const MemoryDescriptor = uefi.tables.MemoryDescriptor;
 
-const boot_info = @import("boot_info.zig");
+const boot_info = @import("shared").boot;
 const console = @import("console.zig");
 const graphics = @import("graphics.zig");
 const filesystem = @import("filesystem.zig");
 const loader = @import("loader.zig");
 const memory = @import("memory.zig");
+const paging = @import("paging.zig");
 const acpi = @import("acpi.zig");
 
 pub const BootInfo = boot_info.BootInfo;
@@ -26,6 +27,7 @@ const KERNEL_PATH = L("\\efi\\ZincOS");
 
 var boot_services: *BootServices = undefined;
 var kernel_boot_info: boot_info.BootInfo = .{
+    .magic = boot_info.BOOT_MAGIC,
     .framebuffer = undefined,
     .memory_map_addr = 0,
     .memory_map_entries = 0,
@@ -33,6 +35,8 @@ var kernel_boot_info: boot_info.BootInfo = .{
     .kernel_virtual_base = 0,
     .kernel_size = 0,
     .rsdp_address = 0,
+    .hhdm_base = 0,
+    .cpu_count = 0,
 };
 
 pub fn main() noreturn {
@@ -76,14 +80,24 @@ pub fn main() noreturn {
     kernel_boot_info.kernel_virtual_base = load_result.virtual_base;
     kernel_boot_info.kernel_size = load_result.size;
 
+    const max_phys_end = paging.get_max_physical_address(boot_services) catch {
+        console.println("[!] FATAL: Cannot read memory map for paging");
+        halt();
+    };
+
+    const pml4 = paging.build_page_tables(boot_services, load_result.segments, max_phys_end) catch {
+        console.println("[!] FATAL: Cannot build page tables");
+        halt();
+    };
+
     memory.process_memory_map(boot_services) catch {
         console.println("[!] FATAL: Cannot get memory map");
-
         halt();
     };
 
     kernel_boot_info.memory_map_addr = @intFromPtr(memory.get_regions().ptr);
     kernel_boot_info.memory_map_entries = memory.get_region_count();
+    kernel_boot_info.hhdm_base = 0xffff_8000_0000_0000;
 
     console.printfln(
         "[+] Boot info prepared at 0x{x}",
@@ -94,10 +108,10 @@ pub fn main() noreturn {
         .{load_result.entry_point},
     );
 
-    exit_boot_services_and_jump(load_result.entry_point);
+    exit_boot_services_and_jump(load_result.entry_point, pml4);
 }
 
-fn exit_boot_services_and_jump(entry_point: u64) noreturn {
+fn exit_boot_services_and_jump(entry_point: u64, pml4: *paging.PageTable) noreturn {
     console.println("[*] Preparing to exit boot services...");
 
     const mmap_info = boot_services.getMemoryMapInfo() catch {
@@ -127,8 +141,13 @@ fn exit_boot_services_and_jump(entry_point: u64) noreturn {
         boot_services.exitBootServices(uefi.handle, mmap_slice.info.key) catch halt();
     };
 
-    const kernel_entry: *const fn (*boot_info.BootInfo) callconv(.c) noreturn = @ptrFromInt(entry_point);
-    kernel_entry(&kernel_boot_info);
+    paging.switch_to(pml4);
+
+    const kernel_entry: *const fn (*boot_info.BootInfo) callconv(.{ .x86_64_sysv = .{} }) noreturn =
+        @ptrFromInt(entry_point);
+    const bi_phys = @intFromPtr(&kernel_boot_info);
+    const bi_hhdm = paging.HHDM_BASE + bi_phys;
+    kernel_entry(@ptrFromInt(bi_hhdm));
 
     unreachable;
 }

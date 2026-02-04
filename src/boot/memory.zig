@@ -4,7 +4,7 @@ const BootServices = uefi.tables.BootServices;
 const MemoryDescriptor = uefi.tables.MemoryDescriptor;
 
 const console = @import("console.zig");
-const boot_info = @import("boot_info.zig");
+const boot_info = @import("shared").boot;
 
 pub const MemoryError = error{
     GetMapInfoFailed,
@@ -66,6 +66,10 @@ pub fn process_memory_map(boot_services: *BootServices) MemoryError!void {
             .base = desc.physical_start,
             .length = desc.number_of_pages * 0x1000,
             .kind = kind,
+            ._reserved0 = 0,
+            ._reserved1 = 0,
+            ._reserved2 = 0,
+            ._padding = 0,
         };
         memory_region_count += 1;
     }

@@ -4,7 +4,7 @@ const BootServices = uefi.tables.BootServices;
 const GraphicsOutput = uefi.protocol.GraphicsOutput;
 
 const console = @import("console.zig");
-const boot_info = @import("boot_info.zig");
+const boot_info = @import("shared").boot;
 
 pub const SetupError = error{
     NoGraphicsOutput,
@@ -66,6 +66,7 @@ pub fn setup(boot_services: *BootServices) SetupError!boot_info.FramebufferInfo 
             .bit_mask => .bitmask,
             .blt_only => .blt_only,
         },
+        ._reserved = 0,
     };
 
     console.printfln("[+] Framebuffer at 0x{x}, {d}x{d}", .{
