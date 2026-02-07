@@ -78,9 +78,21 @@ export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
     mm.debug.heap_stress_test(&kheap_global);
 
     const allocator = kheap_global.allocator();
-    _ = allocator;
 
-    // try arch.smp.init(allocator, boot_info);
+    var smp_service: arch.smp.Service = undefined;
+
+    log.info("Initializing SMP", .{});
+
+    smp_service.init(allocator, boot_info) catch |err| {
+        log.err("SMP initialization failed: {any}", .{err});
+        @panic("Cannot continue without SMP");
+    };
+
+    const cpu_count = smp_service.getCpuCount();
+    const online_count = smp_service.cpu_mgr.online_count.load(.acquire);
+    log.info("SMP initialized: {} CPUs discovered, {} online", .{ cpu_count, online_count });
+    const current_cpu_id = smp_service.getCurrentCpuId();
+    log.info("Running on CPU {}", .{current_cpu_id});
 
     log.info("\nKernel initialization complete. Halting.\n", .{});
 

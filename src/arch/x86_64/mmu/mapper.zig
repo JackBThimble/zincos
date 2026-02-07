@@ -44,7 +44,7 @@ fn assertCanonical(va: u64) void {
 
 fn readCr3() u64 {
     var cr3: u64 = 0;
-    asm volatile ("mov %%cr3, %[x]"
+    asm volatile ("movq %%cr3, %[x]"
         : [x] "=r" (cr3),
     );
     return cr3;

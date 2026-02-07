@@ -203,12 +203,12 @@ pub fn build_page_tables(
 fn enable_large_pages() void {
     var cr4: u64 = 0;
     asm volatile (
-        \\ mov %%cr4, %[out]
+        \\ movq %%cr4, %[out]
         : [out] "=r" (cr4),
     );
     cr4 |= 1 << 4;
     asm volatile (
-        \\ mov %[in], %%cr4
+        \\ movq %[in], %%cr4
         :
         : [in] "r" (cr4),
         : "memory");
@@ -218,7 +218,7 @@ pub fn switch_to(pml4: *PageTable) void {
     enable_large_pages();
     const pml4_phys = @intFromPtr(pml4);
     asm volatile (
-        \\ mov %[in], %%cr3
+        \\ movq %[in], %%cr3
         :
         : [in] "r" (pml4_phys),
         : "memory");

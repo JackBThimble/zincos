@@ -94,7 +94,7 @@ pub const Madt = extern struct {
 };
 
 pub const AcpiTables = struct {
-    rdsp: *const RsdpDescriptor,
+    rsdp: *const RsdpDescriptor,
     madt: ?*const Madt,
 
     pub fn init(rsdp_addr: u64) !AcpiTables {

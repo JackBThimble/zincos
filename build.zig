@@ -69,6 +69,12 @@ pub fn build(b: *std.Build) void {
     const kernel_exe = b.addExecutable(.{ .name = "ZincOS", .root_module = kernel_module });
 
     kernel_exe.setLinkerScript(b.path("src/kernel/linker.ld"));
+    kernel_exe.root_module.addAssemblyFile(b.path(
+        "src/arch/x86_64/asm/ap_trampoline.s",
+    ));
+    kernel_exe.root_module.addAssemblyFile(b.path(
+        "src/arch/x86_64/asm/percpu_reload_cs.s",
+    ));
     const out_dir_name = "img";
     const install_efi = b.addInstallFile(
         efi_exe.getEmittedBin(),
@@ -78,6 +84,7 @@ pub fn build(b: *std.Build) void {
     install_efi.step.dependOn(&efi_exe.step);
     b.getInstallStep().dependOn(&install_efi.step);
 
+    b.installArtifact(kernel_exe);
     const install_kernel = b.addInstallFile(kernel_exe.getEmittedBin(), b.fmt("{s}/efi/{s}", .{ out_dir_name, kernel_exe.name }));
 
     install_kernel.step.dependOn(&kernel_exe.step);
@@ -94,11 +101,9 @@ pub fn build(b: *std.Build) void {
         // "-nographic",
         "-serial",
         "mon:stdio",
-        "-no-reboot",
-        "-enable-kvm",
-        "-cpu",
-        "host",
-        "-s",
+        "-no-shutdown",
+        "-smp",
+        "4",
     };
     const qemu_cmd = b.addSystemCommand(&qemu_args);
     qemu_cmd.step.dependOn(b.getInstallStep());
