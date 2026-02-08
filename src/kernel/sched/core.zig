@@ -26,6 +26,17 @@ pub const CpuSched = struct {
     tick_count: u64 = 0,
 };
 
+fn armCpuTimer(cs: *const CpuSched, task: *const Task) void {
+    if (task == cs.idle_task and cs.queue.isEmpty()) {
+        arch.timer.disarm();
+        return;
+    }
+
+    var quantum_ms: u64 = task_mod.timeSliceForPriority(task.priority);
+    if (quantum_ms == 0) quantum_ms = 1;
+    arch.timer.armOneShotMs(quantum_ms);
+}
+
 pub const SpinLock = struct {
     locked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
@@ -122,10 +133,10 @@ pub fn spawn(
 
 /// Timer tick - called from arch interrupt handler
 pub fn tick() void {
-    // getCpuId() is inline - compiles to a single GS-relative load on x64
     const cpu_id = sched_arch.getCpuId();
     const cs = &cpu_scheds[cpu_id];
     cs.tick_count += 1;
+
     if (cs.current) |curr| {
         if (curr == cs.idle_task) {
             if (!cs.queue.isEmpty()) cs.need_resched = true;
@@ -133,12 +144,8 @@ pub fn tick() void {
         }
 
         curr.total_ticks += 1;
-        if (curr.time_slice > 0) curr.time_slice -= 1;
-        if (curr.time_slice == 0) cs.need_resched = true;
-
-        if (cs.queue.hasHigherPriority(curr.priority)) {
-            cs.need_resched = true;
-        }
+        curr.time_slice = 0;
+        cs.need_resched = true;
     }
 }
 
@@ -153,12 +160,14 @@ pub fn schedule() void {
         const next = pickNext(cs);
         cs.current = next;
         next.state = .running;
+        next.time_slice = task_mod.timeSliceForPriority(next.priority);
+        armCpuTimer(cs, next);
         cs.lock.release();
         sched_arch.loadContext(next.saved_sp);
         unreachable;
     };
 
-    if (old.state == .running) {
+    if (old.state == .running and old != cs.idle_task) {
         old.state = .ready;
         old.time_slice = task_mod.timeSliceForPriority(old.priority);
         cs.queue.enqueue(old);
@@ -168,12 +177,16 @@ pub fn schedule() void {
 
     if (next == old) {
         old.state = .running;
+        old.time_slice = task_mod.timeSliceForPriority(old.priority);
+        armCpuTimer(cs, old);
         cs.lock.release();
         return;
     }
 
     cs.current = next;
     next.state = .running;
+    next.time_slice = task_mod.timeSliceForPriority(next.priority);
+    armCpuTimer(cs, next);
     cs.lock.release();
 
     sched_arch.switchContext(&old.saved_sp, next.saved_sp);
@@ -277,9 +290,24 @@ pub fn exit() noreturn {
 
 fn enqueueOn(cpu_id: u32, t: *Task) void {
     const cs = &cpu_scheds[cpu_id];
+    const local_cpu = sched_arch.getCpuId();
+
     cs.lock.acquire();
     cs.queue.enqueue(t);
+
+    if (cpu_id == local_cpu) {
+        if (cs.current) |curr| {
+            if (t.priority < curr.priority) cs.need_resched = true;
+        } else {
+            cs.need_resched = true;
+        }
+    }
+
     cs.lock.release();
+
+    if (cpu_id != local_cpu) {
+        arch.smp.requestResched(cpu_id);
+    }
 }
 
 fn leastLoadedCpu() u32 {
@@ -337,6 +365,7 @@ pub fn startOnBsp() !void {
 
     boot_task.setName("boot");
     cs.current = boot_task;
+    armCpuTimer(cs, boot_task);
 
     log.info("Scheduler started on BSP (CPU{})", .{cpu_id});
 }
@@ -347,6 +376,7 @@ pub fn startOnAp() void {
 
     cs.current = cs.idle_task;
     cs.idle_task.state = .running;
+    armCpuTimer(cs, cs.idle_task);
 
     log.debug("Scheduler started on AP (CPU{})", .{cpu_id});
 }

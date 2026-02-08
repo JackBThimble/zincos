@@ -14,6 +14,10 @@ var pmm_global: mm.pmm.FrameAllocator = undefined;
 var vmm_mapper_global: arch.vmm.X64Mapper = undefined;
 var kheap_global: mm.heap.KHeap = undefined;
 
+pub export fn kernel_ap_scheduler_start() callconv(.c) void {
+    sched.startOnAp();
+}
+
 export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
     log.setWriter(arch.serial.write);
     log.setTscFn(arch.rdtsc);
@@ -74,14 +78,20 @@ export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
         log.err("Scheduler init failed: {any}", .{err});
         @panic("Scheduler init failed");
     };
-    sched.startOnBsp() catch |err| {
-        log.err("Scheduler BSP start failed: {any}", .{err});
-        @panic("Scheduler BSP start failed");
-    };
-    arch.idt.installSchedHooks(sched.tick, sched.needsResched, sched.schedule);
+    arch.idt.installSchedHooks(
+        sched.tick,
+        sched.needsResched,
+        sched.schedule,
+        sched.requestReached,
+    );
+    arch.idt.init();
     arch.timer.calibrate(&smp_service.lapic);
     smp_service.bootAps(allocator) catch |err| {
         log.err("AP boot failed: {any}", .{err});
+    };
+    sched.startOnBsp() catch |err| {
+        log.err("Scheduler BSP start failed: {any}", .{err});
+        @panic("Scheduler BSP start failed");
     };
 
     arch.enableInterrupts();
@@ -91,9 +101,10 @@ export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
     const current_cpu_id = smp_service.getCurrentCpuId();
     log.info("Running on CPU {}", .{current_cpu_id});
 
-    log.info("\nKernel initialization complete. Halting.\n", .{});
-
-    arch.hcf();
+    log.info("\nKernel initialization complete. Idling.\n", .{});
+    while (true) {
+        arch.sched.haltUntilInterrupt();
+    }
 }
 
 // Panic handler for Zig runtime

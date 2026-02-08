@@ -46,11 +46,12 @@ isr_common:
     pushq %r14
     pushq %r15
 
-    subq $8, %rsp       # align stack to 16 bytes
-    leaq 8(%rsp), %rdi
+    movq %rsp, %r12
+    movq %r12, %rdi
+    andq $-16, %rsp
     call interrupt_dispatch
     call sched_check_preempt
-    addq $8, %rsp
+    movq %r12, %rsp
 
 
     popq %r15

@@ -3,6 +3,7 @@ const apic = @import("../interrupt/apic.zig");
 const percpu = @import("../cpu/percpu.zig");
 const boot = @import("shared").boot;
 const log = @import("shared").log;
+const timer = @import("../interrupt/timer.zig");
 
 const ap_entry = @import("ap_entry.zig");
 const manager = @import("manager.zig");
@@ -90,17 +91,9 @@ fn bootOne(
     );
 
     // wait for ap to start (max 1 second)
-    lapic.timerStartMaskedOneShot(5_000_000, .divide_128);
-    defer lapic.timerStop();
+    const deadline = timer.deadlineAfterMs(1000);
     while (mb.started == 0) {
-        if (lapic.timerCountdownExpired()) {
-            log.err("AP startup timeout: cpu_id={} stage=0x{x} err=0x{x}", .{
-                cpu.apic_id,
-                mb.stage,
-                mb.err,
-            });
-            return error.ApStartupTimeout;
-        }
+        if (timer.deadlinePassed(deadline)) return error.ApStartupTimeout;
         std.atomic.spinLoopHint();
     }
 }

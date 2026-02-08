@@ -105,7 +105,10 @@ pub fn build(b: *std.Build) void {
         "mon:stdio",
         "-no-shutdown",
         "-smp",
-        "4",
+        "20",
+        "-cpu",
+        "host,+invtsc",
+        "--enable-kvm",
     };
     const qemu_cmd = b.addSystemCommand(&qemu_args);
     qemu_cmd.step.dependOn(b.getInstallStep());

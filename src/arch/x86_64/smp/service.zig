@@ -2,12 +2,15 @@ const std = @import("std");
 const boot = @import("shared").boot;
 
 const apic = @import("../interrupt/apic.zig");
+const idt = @import("../interrupt/idt.zig");
 const acpi = @import("../platform/acpi.zig");
 const percpu = @import("../cpu/percpu.zig");
 
 const manager = @import("manager.zig");
 const topology = @import("topology.zig");
 const bringup = @import("bringup.zig");
+
+var active_service: ?*Service = null;
 
 pub const Service = struct {
     lapic: apic.LocalApic = undefined,
@@ -28,6 +31,7 @@ pub const Service = struct {
         self.cpu_mgr = try manager.CpuManager.init(allocator, cpu_count);
         try topology.discoverCpus(&self.cpu_mgr, madt, self.lapic.getId());
         try bringup.setupBsp(&self.cpu_mgr);
+        active_service = self;
     }
 
     pub fn bootAps(
@@ -47,3 +51,18 @@ pub const Service = struct {
         return percpu.getCpuId();
     }
 };
+
+pub fn requestResched(target_cpu_id: u32) void {
+    const svc = active_service orelse return;
+    const cpu = svc.cpu_mgr.getCpu(target_cpu_id) orelse return;
+    if (!cpu.online.load(.acquire)) return;
+    if (target_cpu_id == percpu.getCpuId()) return;
+
+    svc.lapic.sendIpi(
+        @truncate(cpu.apic_id),
+        idt.RESCHED_VECTOR,
+        .fixed,
+        .assert,
+        .edge,
+    );
+}

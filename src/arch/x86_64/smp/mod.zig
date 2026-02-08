@@ -3,3 +3,4 @@ pub const CpuManager = @import("manager.zig").CpuManager;
 pub const topology = @import("topology.zig");
 pub const trampoline = @import("trampoline.zig");
 pub const idle = @import("idle.zig");
+pub const requestResched = @import("service.zig").requestResched;

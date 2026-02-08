@@ -6,4 +6,9 @@ gdt_reload_cs:
     leaq 1f(%rip), %rax
     pushq %rax
     lretq
-1:  ret
+1:
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
+    ret

@@ -1,5 +1,6 @@
 const std = @import("std");
 const log = @import("shared").log;
+const apic = @import("apic.zig");
 
 // =============================================================================
 // x86_64 Interrupt Descriptor Table
@@ -33,7 +34,8 @@ const IdtPtr = packed struct {
 
 var idt: [IDT_ENTRIES]IdtEntry = [_]IdtEntry{std.mem.zeroes(IdtEntry)} ** IDT_ENTRIES;
 
-pub const TIMER_VECTOR: u32 = 32;
+pub const TIMER_VECTOR: u8 = 32;
+pub const RESCHED_VECTOR: u8 = 33;
 pub const SPURIOUS_VECTOR: u8 = 0xff;
 
 pub const InterruptFrame = extern struct {
@@ -69,19 +71,23 @@ extern const isr_stub_table: [IDT_ENTRIES]usize;
 const TickFn = *const fn () void;
 const NeedsReschedFn = *const fn () bool;
 const ScheduleFn = *const fn () void;
+const RequestReschedFn = *const fn () void;
 
 var tick_fn: ?TickFn = null;
 var needs_resched_fn: ?NeedsReschedFn = null;
 var schedule_fn: ?ScheduleFn = null;
+var request_resched_fn: ?RequestReschedFn = null;
 
 pub fn installSchedHooks(
     tick: TickFn,
     needs_resched: NeedsReschedFn,
     sched: ScheduleFn,
+    request_resched: RequestReschedFn,
 ) void {
     tick_fn = tick;
     needs_resched_fn = needs_resched;
     schedule_fn = sched;
+    request_resched_fn = request_resched;
 }
 
 // =============================================================================
@@ -129,6 +135,7 @@ pub export fn interrupt_dispatch(frame: *InterruptFrame) callconv(.c) void {
     switch (vec) {
         0...31 => handleException(frame),
         TIMER_VECTOR => handleTimer(),
+        RESCHED_VECTOR => handleResched(),
         SPURIOUS_VECTOR => {},
         else => {
             log.warn("Unhandled interrupt vector {}", .{vec});
@@ -167,7 +174,7 @@ fn handleException(frame: *const InterruptFrame) void {
         log.err("   CR2=0x{x}", .{cr2});
     }
 
-    @panic("Unhandled CPU excpetion");
+    @panic("Unhandled CPU exception");
 }
 
 fn handleTimer() void {
@@ -175,18 +182,12 @@ fn handleTimer() void {
     sendEoi();
 }
 
-fn sendEoi() void {
-    const base = getApicBase();
-    @as(*volatile u32, @ptrFromInt(base + 0xb0)).* = 0;
+fn handleResched() void {
+    if (request_resched_fn) |f| f();
+    sendEoi();
 }
 
-fn getApicBase() usize {
-    var low: u32 = undefined;
-    var high: u32 = undefined;
-    asm volatile ("rdmsr"
-        : [low] "={eax}" (low),
-          [high] "={edx}" (high),
-        : [msr] "{ecx}" (@as(u32, 0x1b)),
-    );
-    return @intCast(((@as(u64, high) << 32) | low) & ~@as(u64, 0xfff));
+fn sendEoi() void {
+    var lapic = apic.LocalApic.init(apic.getApicBase() & ~@as(u64, 0xfff));
+    lapic.sendEoi();
 }

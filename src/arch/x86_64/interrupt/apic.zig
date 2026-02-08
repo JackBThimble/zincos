@@ -82,6 +82,17 @@ pub const LocalApic = struct {
         self.write(.timer_initial_count, initial_count);
     }
 
+    pub fn timerStartOneShot(
+        self: *const LocalApic,
+        initial_count: u32,
+        divide: TimerDivide,
+        vector: u8,
+    ) void {
+        self.write(.timer_divide_config, @intFromEnum(divide));
+        self.write(.timer_lvt, @as(u32, vector));
+        self.write(.timer_initial_count, initial_count);
+    }
+
     pub fn timerCountdownExpired(self: *const LocalApic) bool {
         if (self.read(.timer_current_count) == 0) {
             return true;
