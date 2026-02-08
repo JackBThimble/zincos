@@ -4,6 +4,8 @@ const percpu = @import("../cpu/percpu.zig");
 const trampoline = @import("trampoline.zig");
 const idle = @import("idle.zig");
 const log = @import("shared").log;
+const idt = @import("../interrupt/idt.zig");
+const timer = @import("../interrupt/timer.zig");
 
 pub export fn apEntry(lapic_ptr: usize, cpu_mgr_ptr: usize, cpu_ptr: usize) callconv(.c) noreturn {
     const mb = trampoline.mailbox();
@@ -28,6 +30,10 @@ pub export fn apEntry(lapic_ptr: usize, cpu_mgr_ptr: usize, cpu_ptr: usize) call
     // Enable local APIC
     lapic.enable();
     mb.stage = trampoline.Stage.lapic_enabled;
+
+    idt.init();
+    timer.startPeriodic(lapic);
+    asm volatile ("sti" ::: .{ .memory = true });
 
     // AP reached kernel entry with resolved per-CPU identity.
     log.info("AP online: cpu_id={} apic_id={}", .{ cpu.cpu_id, cpu.apic_id });

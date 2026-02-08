@@ -1,5 +1,5 @@
 pub fn run() noreturn {
     while (true) {
-        asm volatile ("hlt");
+        asm volatile ("sti; hlt" ::: .{ .memory = true });
     }
 }

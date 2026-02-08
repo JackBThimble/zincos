@@ -75,6 +75,8 @@ pub fn build(b: *std.Build) void {
     kernel_exe.root_module.addAssemblyFile(b.path(
         "src/arch/x86_64/asm/percpu_reload_cs.s",
     ));
+    kernel_exe.root_module.addAssemblyFile(b.path("src/arch/x86_64/asm/isr_stubs.s"));
+    kernel_exe.root_module.addAssemblyFile(b.path("src/arch/x86_64/asm/context_switch.s"));
     const out_dir_name = "img";
     const install_efi = b.addInstallFile(
         efi_exe.getEmittedBin(),

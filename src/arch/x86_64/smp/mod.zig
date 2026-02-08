@@ -2,4 +2,4 @@ pub const Service = @import("service.zig").Service;
 pub const CpuManager = @import("manager.zig").CpuManager;
 pub const topology = @import("topology.zig");
 pub const trampoline = @import("trampoline.zig");
-pub const idle = @import("trampoline.zig");
+pub const idle = @import("idle.zig");

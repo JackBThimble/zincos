@@ -3,6 +3,7 @@ const arch = @import("arch");
 const shared = @import("shared");
 const log = @import("shared").log;
 const mm = @import("mm");
+const sched = @import("sched/core.zig");
 
 pub const std_options: std.Options = .{
     .page_size_min = 4096,
@@ -19,7 +20,7 @@ export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
     // Initialize serial for debug output
     if (boot_info.magic != shared.boot.BOOT_MAGIC) {
         log.err("ERROR: Invalid boot magic!\n", .{});
-        halt();
+        arch.hcf();
     }
     log.info("Boot magic validated\n", .{});
     log.info("Framebuffer address: 0x{X}", .{boot_info.framebuffer.base_address});
@@ -68,6 +69,23 @@ export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
     };
 
     const cpu_count = smp_service.getCpuCount();
+
+    sched.init(allocator, cpu_count) catch |err| {
+        log.err("Scheduler init failed: {any}", .{err});
+        @panic("Scheduler init failed");
+    };
+    sched.startOnBsp() catch |err| {
+        log.err("Scheduler BSP start failed: {any}", .{err});
+        @panic("Scheduler BSP start failed");
+    };
+    arch.idt.installSchedHooks(sched.tick, sched.needsResched, sched.schedule);
+    arch.timer.calibrate(&smp_service.lapic);
+    smp_service.bootAps(allocator) catch |err| {
+        log.err("AP boot failed: {any}", .{err});
+    };
+
+    arch.enableInterrupts();
+
     const online_count = smp_service.cpu_mgr.online_count.load(.acquire);
     log.info("SMP initialized: {} CPUs discovered, {} online", .{ cpu_count, online_count });
     const current_cpu_id = smp_service.getCurrentCpuId();
@@ -75,14 +93,7 @@ export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
 
     log.info("\nKernel initialization complete. Halting.\n", .{});
 
-    halt();
-}
-
-fn halt() noreturn {
-    asm volatile ("cli");
-    while (true) {
-        asm volatile ("hlt");
-    }
+    arch.hcf();
 }
 
 // Panic handler for Zig runtime
@@ -90,5 +101,5 @@ pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     arch.serial.write("KERNEL PANIC: ");
     arch.serial.write(msg);
     arch.serial.write("\n");
-    halt();
+    arch.hcf();
 }

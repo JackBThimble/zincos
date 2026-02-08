@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const LocalApic = struct {
     base_address: u64,
-    const TimerDivide = enum(u4) {
+    pub const TimerDivide = enum(u4) {
         divide_2 = 0x0,
         divide_4 = 0x1,
         divide_8 = 0x2,
@@ -34,12 +34,12 @@ pub const LocalApic = struct {
         return .{ .base_address = base_addr };
     }
 
-    fn read(self: *const LocalApic, reg: Register) u32 {
+    pub fn read(self: *const LocalApic, reg: Register) u32 {
         const addr = self.base_address + @intFromEnum(reg);
         return @as(*volatile u32, @ptrFromInt(addr)).*;
     }
 
-    fn write(self: *const LocalApic, reg: Register, value: u32) void {
+    pub fn write(self: *const LocalApic, reg: Register, value: u32) void {
         const addr = self.base_address + @intFromEnum(reg);
         @as(*volatile u32, @ptrFromInt(addr)).* = value;
     }

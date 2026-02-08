@@ -27,10 +27,15 @@ pub const Service = struct {
         const cpu_count = try topology.countEnabledCpus(madt);
         self.cpu_mgr = try manager.CpuManager.init(allocator, cpu_count);
         try topology.discoverCpus(&self.cpu_mgr, madt, self.lapic.getId());
-
         try bringup.setupBsp(&self.cpu_mgr);
+    }
+
+    pub fn bootAps(
+        self: *Service,
+        allocator: std.mem.Allocator,
+    ) !void {
         try bringup.bootAps(&self.lapic, &self.cpu_mgr, allocator);
-        try self.cpu_mgr.waitForOnline(cpu_count, 5000);
+        try self.cpu_mgr.waitForOnline(self.cpu_mgr.cpu_count, 2000);
     }
 
     pub fn getCpuCount(self: *const Service) u32 {
