@@ -2,6 +2,7 @@ const std = @import("std");
 const apic = @import("../interrupt/apic.zig");
 const percpu = @import("../cpu/percpu.zig");
 const boot = @import("shared").boot;
+const log = @import("shared").log;
 
 const ap_entry = @import("ap_entry.zig");
 const manager = @import("manager.zig");
@@ -58,6 +59,8 @@ fn bootOne(
     mb.cpu_mgr_ptr = @intFromPtr(cpu_mgr);
     mb.cpu_ptr = @intFromPtr(cpu);
     mb.entry = @intFromPtr(&ap_entry.apEntry);
+    mb.stage = 0;
+    mb.err = trampoline.Error.none;
     mb.started = 0;
 
     // send INIT IPI
@@ -69,7 +72,6 @@ fn bootOne(
         .level,
     );
     busyWaitMs(10);
-
     const vec: u8 = @truncate(trampoline.TRAMPOLINE_ADDR >> 12);
     lapic.sendIpi(
         @truncate(cpu.apic_id),
@@ -88,14 +90,18 @@ fn bootOne(
     );
 
     // wait for ap to start (max 1 second)
-    const timeout_us: u64 = 1_000_000;
-    var elapsed: u64 = 0;
-    while (@atomicLoad(u32, &mb.started, .acquire) == 0) {
-        busyWaitUs(100);
-        elapsed += 100;
-        if (elapsed > timeout_us) {
+    lapic.timerStartMaskedOneShot(5_000_000, .divide_128);
+    defer lapic.timerStop();
+    while (mb.started == 0) {
+        if (lapic.timerCountdownExpired()) {
+            log.err("AP startup timeout: cpu_id={} stage=0x{x} err=0x{x}", .{
+                cpu.apic_id,
+                mb.stage,
+                mb.err,
+            });
             return error.ApStartupTimeout;
         }
+        std.atomic.spinLoopHint();
     }
 }
 

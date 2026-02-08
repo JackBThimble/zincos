@@ -2,6 +2,16 @@ const std = @import("std");
 
 pub const LocalApic = struct {
     base_address: u64,
+    const TimerDivide = enum(u4) {
+        divide_2 = 0x0,
+        divide_4 = 0x1,
+        divide_8 = 0x2,
+        divide_16 = 0x3,
+        divide_32 = 0x8,
+        divide_64 = 0x9,
+        divide_128 = 0xa,
+        divide_1 = 0xb,
+    };
 
     const Register = enum(u32) {
         id = 0x20,
@@ -64,6 +74,23 @@ pub const LocalApic = struct {
         while ((self.read(.icr_low) & (1 << 12)) != 0) {
             std.atomic.spinLoopHint();
         }
+    }
+
+    pub fn timerStartMaskedOneShot(self: *const LocalApic, initial_count: u32, divide: TimerDivide) void {
+        self.write(.timer_divide_config, @intFromEnum(divide));
+        self.write(.timer_lvt, (1 << 16) | 0xff);
+        self.write(.timer_initial_count, initial_count);
+    }
+
+    pub fn timerCountdownExpired(self: *const LocalApic) bool {
+        if (self.read(.timer_current_count) == 0) {
+            return true;
+        }
+        return false;
+    }
+
+    pub fn timerStop(self: *const LocalApic) void {
+        self.write(.timer_initial_count, 0);
     }
 
     pub const DeliveryMode = enum(u3) {

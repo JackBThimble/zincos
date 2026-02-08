@@ -7,6 +7,8 @@
 ap_trampoline_start:
     cli
 
+    movl $0, (ap_trampoline_err - ap_trampoline_start + 0x8000)
+    movl $0x10, (ap_trampoline_stage - ap_trampoline_start + 0x8000)
 
     # Load GDT pointer
     lgdt (ap_trampoline_gdt_ptr - ap_trampoline_start + 0x8000)
@@ -20,6 +22,8 @@ ap_trampoline_start:
 
 .code32
 ap_trampoline_32:
+    movl $0x20, (ap_trampoline_stage - ap_trampoline_start + 0x8000)
+
     # Set up segments
     mov $0x10, %ax
     mov %ax, %ds
@@ -52,6 +56,8 @@ ap_trampoline_32:
 
 .code64
 ap_trampoline_64:
+    movl $0x30, (ap_trampoline_stage - ap_trampoline_start + 0x8000)
+
     # Zero out segment registers
     mov $0x10, %rax
     mov %ax, %ds
@@ -77,6 +83,7 @@ ap_trampoline_64:
     mov (ap_trampoline_entry - ap_trampoline_start + 0x8000), %rax
 
     # Mark as started
+    movl $0x40, (ap_trampoline_stage - ap_trampoline_start + 0x8000)
     movl $1, (ap_trampoline_started - ap_trampoline_start + 0x8000)
     mfence
 
@@ -118,6 +125,10 @@ ap_trampoline_cpu_ptr:
     .quad 0
 ap_trampoline_entry:
     .quad 0
+ap_trampoline_stage:
+    .long 0
+ap_trampoline_err:
+    .long 0
 ap_trampoline_started:
     .long 0
 
