@@ -111,6 +111,18 @@ pub fn init() void {
     log.info("IDT loaded: {} entries", .{IDT_ENTRIES});
 }
 
+pub fn load() void {
+    const idtr = IdtPtr{
+        .limit = @sizeOf(@TypeOf(idt)) - 1,
+        .base = @intFromPtr(&idt),
+    };
+    asm volatile ("lidtq %[idtr]"
+        :
+        : [idtr] "m" (idtr),
+    );
+    log.info("IDT loaded: {} entries", .{IDT_ENTRIES});
+}
+
 pub fn setGate(vector: u8, handler_addr: usize, gate_type: GateType, dpl: u2, ist: u3) void {
     const addr: u64 = @intCast(handler_addr);
     idt[vector] = IdtEntry{

@@ -339,7 +339,7 @@ pub fn needsResched() bool {
     return cpu_scheds[cpu_id].need_resched;
 }
 
-pub fn requestReached() void {
+pub fn requestResched() void {
     const cpu_id = sched_arch.getCpuId();
     cpu_scheds[cpu_id].need_resched = true;
 }

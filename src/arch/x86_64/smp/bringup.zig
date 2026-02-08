@@ -72,7 +72,7 @@ fn bootOne(
         .assert,
         .level,
     );
-    busyWaitMs(10);
+    timer.busyWaitMs(10);
     const vec: u8 = @truncate(trampoline.TRAMPOLINE_ADDR >> 12);
     lapic.sendIpi(
         @truncate(cpu.apic_id),
@@ -81,7 +81,7 @@ fn bootOne(
         .assert,
         .edge,
     );
-    busyWaitMs(200);
+    timer.busyWaitMs(200);
     lapic.sendIpi(
         @truncate(cpu.apic_id),
         vec,
@@ -96,27 +96,4 @@ fn bootOne(
         if (timer.deadlinePassed(deadline)) return error.ApStartupTimeout;
         std.atomic.spinLoopHint();
     }
-}
-
-fn busyWaitMs(ms: u64) void {
-    busyWaitUs(ms * 1000);
-}
-
-fn busyWaitUs(us: u64) void {
-    const start = readTsc();
-    const cycles = us * 2500; // 2.5GHz guestimate
-    while (readTsc() - start < cycles) {
-        std.atomic.spinLoopHint();
-    }
-}
-
-fn readTsc() u64 {
-    var low: u32 = undefined;
-    var high: u32 = undefined;
-
-    asm volatile ("rdtsc"
-        : [low] "={eax}" (low),
-          [high] "={edx}" (high),
-    );
-    return (@as(u64, high) << 32) | low;
 }

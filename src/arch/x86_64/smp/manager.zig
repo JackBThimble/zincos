@@ -1,6 +1,7 @@
 const std = @import("std");
 const percpu = @import("../cpu/percpu.zig");
 const PerCpu = percpu.PerCpu;
+const timer = @import("../interrupt/timer.zig");
 
 pub const CpuManager = struct {
     allocator: std.mem.Allocator,
@@ -73,22 +74,10 @@ pub const CpuManager = struct {
     }
 
     pub fn waitForOnline(self: *const CpuManager, target_count: u32, timeout_ms: u64) !void {
-        const start = readTsc();
-        const timeout_cycles = timeout_ms * 1_000_000;
-
+        const deadline = timer.deadlineAfterMs(timeout_ms);
         while (self.online_count.load(.acquire) < target_count) {
-            if (readTsc() - start > timeout_cycles) return error.Timeout;
+            if (timer.deadlinePassed(deadline)) return error.Timeout;
             std.atomic.spinLoopHint();
         }
-    }
-
-    fn readTsc() u64 {
-        var low: u32 = undefined;
-        var high: u32 = undefined;
-        asm volatile ("rdtsc"
-            : [low] "={eax}" (low),
-              [high] "={edx}" (high),
-        );
-        return (@as(u64, high) << 32) | low;
     }
 };

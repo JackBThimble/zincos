@@ -82,7 +82,7 @@ export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
         sched.tick,
         sched.needsResched,
         sched.schedule,
-        sched.requestReached,
+        sched.requestResched,
     );
     arch.idt.init();
     arch.timer.calibrate(&smp_service.lapic);
