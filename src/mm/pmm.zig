@@ -6,9 +6,66 @@ const BootInfo = shared.boot.BootInfo;
 const MemoryRegion = shared.boot.MemoryRegion;
 const MemoryKind = shared.boot.MemoryKind;
 const FramebufferInfo = shared.boot.FramebufferInfo;
+const MAX_CPUS = shared.types.MAX_CPUS;
 
 pub const PAGE_SIZE: u64 = 4096;
 pub const PhysRange = struct { base: u64, len: u64 };
+
+// ----------------------
+// Per-CPU page cache
+// ----------------------
+const CACHE_SIZE = 64;
+const REFILL_COUNT = 32;
+const FLUSH_THRESHOLD = 56;
+
+const PcpuCache = struct {
+    frames: [CACHE_SIZE]u64 = [_]u64{0} ** CACHE_SIZE,
+    count: u32 = 0,
+
+    /// Fast path: pop a frame, no lock neccessary
+    fn pop(self: *PcpuCache) ?u64 {
+        if (self.count == 0) return null;
+        self.count -= 1;
+        return self.frames[self.count];
+    }
+
+    /// Fast path: push a frame, no lock neccessary
+    /// Returns false if full (caller should flush to global to first)
+    fn push(self: *PcpuCache, frame: u64) bool {
+        if (self.count >= CACHE_SIZE) return false;
+        self.frames[self.count] = frame;
+        self.count += 1;
+        return true;
+    }
+
+    /// Drain n frames out for flushing back to global
+    fn drainBatch(self: *PcpuCache, out: []u64) u32 {
+        const n: u32 = @intCast(@min(out.len, self.count));
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            self.count -= 1;
+            out[i] = self.frames[self.count];
+        }
+        return n;
+    }
+};
+
+// ------------------------------
+// Global lock
+// ------------------------------
+const SpinLock = struct {
+    locked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    fn acquire(self: *SpinLock) void {
+        while (self.locked.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+            std.atomic.spinLoopHint();
+        }
+    }
+
+    fn release(self: *SpinLock) void {
+        self.locked.store(false, .release);
+    }
+};
 
 pub const FrameAllocator = struct {
     hhdm_base: u64,
@@ -16,6 +73,8 @@ pub const FrameAllocator = struct {
     bitmap: []volatile u8,
     frame_count: usize,
     used_frames: usize,
+    lock: SpinLock = .{},
+    pcpu: [MAX_CPUS]PcpuCache = [_]PcpuCache{.{}} ** MAX_CPUS,
 
     pub fn init(bi: *const BootInfo) FrameAllocator {
         const regions = memoryMapSlice(bi);
@@ -79,6 +138,41 @@ pub const FrameAllocator = struct {
     }
 
     pub fn allocFrame(self: *FrameAllocator) ?u64 {
+        const cpu_id = arch.getCpuId();
+        var cache = &self.pcpu[cpu_id];
+
+        if (cache.pop()) |frame| return frame;
+
+        self.lock.acquire();
+        defer self.lock.release();
+
+        var refilled: u32 = 0;
+        while (refilled < REFILL_COUNT) : (refilled += 1) {
+            const frame = self.bitmapAlloc() orelse break;
+            _ = cache.push(frame);
+        }
+
+        return cache.pop();
+    }
+
+    pub fn freeFrame(self: *FrameAllocator, phys: u64) void {
+        std.debug.assert((phys & (PAGE_SIZE - 1)) == 0);
+        assertPhys(phys);
+
+        const cpu_id = arch.getCpuId();
+        var cache = &self.pcpu[cpu_id];
+
+        if (cache.push(phys)) {
+            if (cache.count >= FLUSH_THRESHOLD) {
+                self.flushToGlobal(cache);
+            }
+            return;
+        }
+        self.flushToGlobal(cache);
+        _ = cache.push(phys);
+    }
+
+    fn bitmapAlloc(self: *FrameAllocator) ?u64 {
         for (self.bitmap, 0..) |b, byte_i| {
             if (b == 0xff) continue;
 
@@ -100,10 +194,7 @@ pub const FrameAllocator = struct {
         return null;
     }
 
-    pub fn freeFrame(self: *FrameAllocator, phys: u64) void {
-        std.debug.assert((phys & (PAGE_SIZE - 1)) == 0);
-        assertPhys(phys);
-
+    fn bitmapFree(self: *FrameAllocator, phys: u64) void {
         const frame_index: usize = @intCast(phys / PAGE_SIZE);
         const byte_i = frame_index / 8;
         const bit_i: u3 = @intCast(frame_index % 8);
@@ -116,6 +207,21 @@ pub const FrameAllocator = struct {
         if ((self.bitmap[byte_i] & mask) == 0) @panic("double free frame");
         self.bitmap[byte_i] &= ~mask;
         self.used_frames -= 1;
+    }
+
+    fn flushToGlobal(self: *FrameAllocator, cache: *PcpuCache) void {
+        const half = cache.count / 2;
+        if (half == 0) return;
+
+        var batch: [CACHE_SIZE / 2]u64 = undefined;
+        const n = cache.drainBatch(batch[0..half]);
+
+        self.lock.acquire();
+        defer self.lock.release();
+
+        for (0..n) |i| {
+            self.bitmapFree(batch[i]);
+        }
     }
 
     fn markRangeFree(self: *FrameAllocator, base: u64, len: u64) void {

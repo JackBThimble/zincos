@@ -54,6 +54,7 @@ pub fn build(b: *std.Build) void {
     arch_module.addImport("shared", shared_module);
 
     mm_module.addImport("shared", shared_module);
+    mm_module.addImport("arch", arch_module);
 
     kernel_module.addImport("arch", arch_module);
     kernel_module.addImport("shared", shared_module);

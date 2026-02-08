@@ -38,3 +38,9 @@ pub fn rdtsc() u64 {
         : .{ .memory = true });
     return (@as(u64, high) << 32) | low;
 }
+
+pub fn getCpuId() usize {
+    return @as(usize, asm volatile ("movl %%gs:0, %[id]"
+        : [id] "=r" (-> u32),
+    ));
+}
