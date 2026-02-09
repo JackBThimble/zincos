@@ -7,6 +7,20 @@ const log = @import("shared").log;
 /// Flags for heap pages: writable, not executable
 const HEAP_PAGE_FLAGS = vmm.MapFlags{ .writable = true };
 
+const SpinLock = struct {
+    locked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    pub fn acquire(self: *SpinLock) void {
+        while (self.locked.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+            std.atomic.spinLoopHint();
+        }
+    }
+
+    pub fn release(self: *SpinLock) void {
+        self.locked.store(false, .release);
+    }
+};
+
 pub const KHeap = struct {
     pub const ALIGN_MIN: usize = 16;
     pub const BACKPTR_SIZE: usize = @sizeOf(usize);
@@ -30,6 +44,8 @@ pub const KHeap = struct {
     wilderness: *Header, // last free block (always at end of mapped heap)
 
     bins: [BIN_COUNT]?*Header = [_]?*Header{null} ** BIN_COUNT,
+
+    lock: SpinLock = .{},
 
     // Statistics (always tracked)
     total_allocs: usize = 0,
@@ -403,6 +419,9 @@ pub const KHeap = struct {
     pub fn kmalloc(self: *KHeap, size: usize, alignment: usize) ?[*]u8 {
         if (size == 0) return null;
 
+        self.lock.acquire();
+        defer self.lock.release();
+
         const a = @max(alignment, ALIGN_MIN);
         std.debug.assert(std.math.isPowerOfTwo(a));
 
@@ -447,6 +466,9 @@ pub const KHeap = struct {
     }
 
     pub fn kfree(self: *KHeap, ptr: [*]u8) void {
+        self.lock.acquire();
+        defer self.lock.release();
+
         const p = @intFromPtr(ptr);
         const base_u = @as(usize, @intCast(self.base));
         const heap_end_u = @as(usize, @intCast(self.base + self.size));
@@ -529,6 +551,8 @@ pub const KHeap = struct {
             return null;
         }
 
+        self.lock.acquire();
+
         const old = old_ptr.?;
 
         const p = @intFromPtr(old);
@@ -538,6 +562,10 @@ pub const KHeap = struct {
 
         const old_size = h.user_size;
         const copy_n = @min(new_size, old_size);
+
+        // Lock must be free before calling kmalloc/kfree, but header info must be
+        // read under the lock
+        self.lock.release();
 
         const new_ptr = self.kmalloc(new_size, alignment) orelse return null;
 

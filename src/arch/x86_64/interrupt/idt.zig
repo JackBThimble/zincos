@@ -97,18 +97,8 @@ pub fn init() void {
     for (0..IDT_ENTRIES) |i| {
         setGate(@intCast(i), isr_stub_table[i], .interrupt, 0, 0);
     }
-
-    const idtr = IdtPtr{
-        .limit = @sizeOf(@TypeOf(idt)) - 1,
-        .base = @intFromPtr(&idt),
-    };
-
-    asm volatile ("lidtq %[idtr]"
-        :
-        : [idtr] "m" (idtr),
-    );
-
-    log.info("IDT loaded: {} entries", .{IDT_ENTRIES});
+    log.info("IDT initialized: {} entries", .{IDT_ENTRIES});
+    load();
 }
 
 pub fn load() void {

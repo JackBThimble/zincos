@@ -1,3 +1,15 @@
+//! Kernel Entry and Initialization
+//!
+//! - Reads boot info
+//! - Sets up serial logger
+//! - Sets up framebuffer instance
+//! - Memory mapping
+//! - Kernel heap initialization
+//! - SMP bringup
+//!
+//! Notes:
+//! - setGsBase must be called on BSP before any allocations are made
+//!
 const std = @import("std");
 const arch = @import("arch");
 const shared = @import("shared");
