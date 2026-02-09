@@ -32,8 +32,12 @@ pub export fn apEntry(lapic_ptr: usize, cpu_mgr_ptr: usize, cpu_ptr: usize) call
     lapic.enable();
     mb.stage = trampoline.Stage.lapic_enabled;
 
+    // Load IDT
     idt.load();
     kernel_ap_scheduler_start();
+
+    // Setup syscalls
+    @import("../syscall.zig").init();
 
     // AP reached kernel entry with resolved per-CPU identity.
     cpu_mgr.markOnline(cpu);

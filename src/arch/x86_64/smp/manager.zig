@@ -21,7 +21,7 @@ pub const CpuManager = struct {
         };
     }
 
-    pub fn allocateCpu(self: *CpuManager, apic_id: u32, is_bsp: bool) !*PerCpu {
+    pub fn allocateCpu(self: *CpuManager, apic_id: u32, is_bsp: u8) !*PerCpu {
         if (self.cpu_count >= self.cpus.len) return error.TooManyCpus;
 
         const cpu = try self.allocator.create(PerCpu);
@@ -30,9 +30,9 @@ pub const CpuManager = struct {
             .cpu_id = self.cpu_count,
             .apic_id = apic_id,
             .is_bsp = is_bsp,
-            .online = std.atomic.Value(bool).init(false),
+            .online = 0,
             .kernel_stack = 0,
-            .current_task = null,
+            .current_task = 0,
             .tss = std.mem.zeroes(PerCpu.Tss),
             .gdt = PerCpu.Gdt.init(),
             .scratch0 = 0,
@@ -63,13 +63,13 @@ pub const CpuManager = struct {
     pub fn getBsp(self: *const CpuManager) ?*PerCpu {
         for (0..self.cpu_count) |i| {
             const cpu = self.cpus[i] orelse continue;
-            if (cpu.is_bsp) return cpu;
+            if (cpu.is_bsp == 1) return cpu;
         }
         return null;
     }
 
     pub fn markOnline(self: *CpuManager, cpu: *PerCpu) void {
-        cpu.online.store(true, .release);
+        cpu.setOnline(true);
         _ = self.online_count.fetchAdd(1, .acq_rel);
     }
 

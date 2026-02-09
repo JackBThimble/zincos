@@ -78,6 +78,7 @@ pub fn build(b: *std.Build) void {
     ));
     kernel_exe.root_module.addAssemblyFile(b.path("src/arch/x86_64/asm/isr_stubs.s"));
     kernel_exe.root_module.addAssemblyFile(b.path("src/arch/x86_64/asm/context_switch.s"));
+    kernel_exe.root_module.addAssemblyFile(b.path("src/arch/x86_64/asm/syscall_entry.s"));
     const out_dir_name = "img";
     const install_efi = b.addInstallFile(
         efi_exe.getEmittedBin(),

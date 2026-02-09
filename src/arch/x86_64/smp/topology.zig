@@ -40,7 +40,8 @@ pub fn discoverCpus(cpu_mgr: *manager.CpuManager, madt: *const acpi.Madt, bsp_ap
             );
 
             if (lapic.isEnabled()) {
-                const is_bsp = lapic.apic_id == bsp_apic_id;
+                var is_bsp: u8 = 0;
+                if (lapic.apic_id == bsp_apic_id) is_bsp = 1;
                 _ = try cpu_mgr.allocateCpu(lapic.apic_id, is_bsp);
             }
         }

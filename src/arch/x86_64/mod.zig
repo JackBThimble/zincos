@@ -6,6 +6,7 @@ pub const percpu = @import("cpu/percpu.zig");
 pub const sched = @import("sched.zig");
 pub const idt = @import("interrupt/idt.zig");
 pub const timer = @import("interrupt/timer.zig");
+pub const syscall = @import("syscall.zig");
 
 comptime {
     _ = idt.interrupt_dispatch;

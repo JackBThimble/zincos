@@ -2,6 +2,7 @@ const std = @import("std");
 const shared = @import("shared");
 const arch = @import("arch");
 const percpu = arch.percpu;
+const ipc = @import("../ipc/mod.zig");
 
 pub const TaskState = enum(u8) {
     /// In a run queue, eligible for scheduling
@@ -64,6 +65,26 @@ pub fn timeSliceForPriority(prio: u5) u32 {
 
 pub const KERNEL_STACK_SIZE: usize = 32 * 1024; // 32 KiB per task
 
+pub const IpcState = struct {
+    /// Message buffer.
+    ///     - send/call: holds outgoing message (read by receiver)
+    ///     - receive: holds incoming message (writen by sender)
+    msg: ipc.Message = .{},
+
+    /// For call(): pointer to the caller's stack-local reply message.
+    /// the server's reply() writes directly here. Non-null only while
+    /// the caller is blocked waiting for reply.
+    reply_buf: ?*ipc.Message = null,
+
+    /// For receive(): the task that sent us a message via call() and
+    /// expects a reply. Null if the sender used send() (fire and forget).
+    caller: ?*Task = null,
+
+    /// True if this task did call() and is blocked waiting for reply().
+    /// Prevents recevie() from waking the sender prematurely - a sender
+    /// that used call() stays blocked until reply() explicitly wakes it.
+    waiting_for_reply: bool = false,
+};
 pub const Task = struct {
     // --- Identity ---
     tid: u32,
@@ -94,6 +115,9 @@ pub const Task = struct {
     // --- Blocking ---
     /// Opaque pointer to whatever this task is blocked on
     wait_channel: ?*anyopaque = null,
+
+    /// IPC state
+    ipc: IpcState = .{},
 
     pub fn setName(self: *Task, src: []const u8) void {
         const len = @min(src.len, self.name.len - 1);

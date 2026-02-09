@@ -4,6 +4,7 @@ const percpu = @import("../cpu/percpu.zig");
 const boot = @import("shared").boot;
 const log = @import("shared").log;
 const timer = @import("../interrupt/timer.zig");
+const syscall = @import("../syscall.zig");
 
 const ap_entry = @import("ap_entry.zig");
 const manager = @import("manager.zig");
@@ -18,6 +19,7 @@ pub fn setupBsp(cpu_mgr: *manager.CpuManager) !void {
     bsp.gdt.load();
     bsp.gdt.loadTss();
     percpu.setGsBase(bsp);
+    syscall.init();
     cpu_mgr.markOnline(bsp);
 }
 
@@ -34,7 +36,7 @@ pub fn bootAps(
     // Boot each AP
     for (0..cpu_mgr.cpu_count) |i| {
         const cpu = cpu_mgr.getCpu(@intCast(i)) orelse continue;
-        if (cpu.is_bsp) continue;
+        if (cpu.is_bsp == 1) continue;
 
         try bootOne(lapic, cpu_mgr, allocator, cpu, pml4);
     }

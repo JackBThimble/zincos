@@ -16,11 +16,17 @@ const shared = @import("shared");
 const log = @import("shared").log;
 const mm = @import("mm");
 const sched = @import("sched/core.zig");
+const ipc = @import("ipc/mod.zig");
+const syscall_dispatch = @import("syscall_dispatch.zig");
 
 pub const std_options: std.Options = .{
     .page_size_min = 4096,
     .page_size_max = 4096,
 };
+
+comptime {
+    _ = syscall_dispatch.kernel_syscall_dispatch;
+}
 
 var pmm_global: mm.pmm.FrameAllocator = undefined;
 var vmm_mapper_global: arch.vmm.X64Mapper = undefined;
@@ -74,6 +80,7 @@ export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
     mm.debug.heap_stress_test(&kheap_global);
 
     const allocator = kheap_global.allocator();
+    ipc.init(allocator);
 
     var smp_service: arch.smp.Service = undefined;
 

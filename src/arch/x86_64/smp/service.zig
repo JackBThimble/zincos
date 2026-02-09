@@ -55,7 +55,7 @@ pub const Service = struct {
 pub fn requestResched(target_cpu_id: u32) void {
     const svc = active_service orelse return;
     const cpu = svc.cpu_mgr.getCpu(target_cpu_id) orelse return;
-    if (!cpu.online.load(.acquire)) return;
+    if (@atomicLoad(u32, &cpu.online, .acquire) == 0) return;
     if (target_cpu_id == percpu.getCpuId()) return;
 
     svc.lapic.sendIpi(

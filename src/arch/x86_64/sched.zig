@@ -22,7 +22,7 @@ pub inline fn disableIrq() IrqFlags {
     var flags: u64 = undefined;
     asm volatile (
         \\pushfq
-        \\pop %[rflags]
+        \\pop %[flags]
         \\cli
         : [flags] "=r" (flags),
         :
