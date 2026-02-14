@@ -77,6 +77,8 @@ export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
         heap_size,
     );
 
+    mm.address_space.init(vmm_mapper_global.mapper());
+
     mm.debug.heap_stress_test(&kheap_global);
 
     const allocator = kheap_global.allocator();

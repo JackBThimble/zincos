@@ -55,7 +55,7 @@ enter_user_mode:
     xorq %r15, %r15
 
     # Build iretq frame
-    pushq $USER_CS          # SS
+    pushq $USER_SS          # SS
     pushq %rsi              # RSP (user stack)
     pushq $RFLAGS_IF        # RFLAGS
     pushq $USER_CS          # CS
@@ -70,4 +70,3 @@ enter_user_mode:
     swapgs
 
     iretq
-
