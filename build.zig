@@ -67,19 +67,35 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
     });
 
-    const kernel_exe = b.addExecutable(.{ .name = "ZincOS", .root_module = kernel_module });
+    const kernel_exe = b.addExecutable(.{
+        .name = "ZincOS",
+        .root_module = kernel_module,
+    });
 
-    kernel_exe.setLinkerScript(b.path("src/kernel/linker.ld"));
-    kernel_exe.root_module.addAssemblyFile(b.path(
-        "src/arch/x86_64/asm/ap_trampoline.s",
-    ));
-    kernel_exe.root_module.addAssemblyFile(b.path(
-        "src/arch/x86_64/asm/percpu_reload_cs.s",
-    ));
-    kernel_exe.root_module.addAssemblyFile(b.path("src/arch/x86_64/asm/isr_stubs.s"));
-    kernel_exe.root_module.addAssemblyFile(b.path("src/arch/x86_64/asm/context_switch.s"));
-    kernel_exe.root_module.addAssemblyFile(b.path("src/arch/x86_64/asm/syscall_entry.s"));
-    kernel_exe.root_module.addAssemblyFile(b.path("src/arch/x86_64/asm/user_entry.s"));
+    kernel_exe.use_lld = true;
+    kernel_exe.use_llvm = true;
+    kernel_exe.setLinkerScript(
+        b.path("src/kernel/linker.ld"),
+    );
+    kernel_exe.root_module.addAssemblyFile(
+        b.path("src/arch/x86_64/asm/ap_trampoline.s"),
+    );
+    kernel_exe.root_module.addAssemblyFile(
+        b.path("src/arch/x86_64/asm/percpu_reload_cs.s"),
+    );
+    kernel_exe.root_module.addAssemblyFile(
+        b.path("src/arch/x86_64/asm/isr_stubs.s"),
+    );
+    kernel_exe.root_module.addAssemblyFile(
+        b.path("src/arch/x86_64/asm/context_switch.s"),
+    );
+    kernel_exe.root_module.addAssemblyFile(
+        b.path("src/arch/x86_64/asm/syscall_entry.s"),
+    );
+    kernel_exe.root_module.addAssemblyFile(
+        b.path("src/arch/x86_64/asm/user_entry.s"),
+    );
+
     const out_dir_name = "img";
     const install_efi = b.addInstallFile(
         efi_exe.getEmittedBin(),
