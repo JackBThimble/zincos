@@ -13,6 +13,7 @@ const USER_DEMO_LOAD_CODE_FLAGS = mm.vmm.MapFlags{
 
 const user_demo_code = [_]u8{
     0xb8, 0x02, 0x00, 0x00, 0x00, // mov eax, 2 ; shared.syscall.Number.sched_yield
+    0x0f, 0x05, // syscall
     0xeb, 0xf7, // jmp back to mov eax, 2
 };
 
@@ -20,8 +21,6 @@ pub fn spawnDemoUserProcess(allocator: std.mem.Allocator) !void {
     const as = try mm.address_space.AddressSpace.create(allocator);
     errdefer as.destroy(allocator);
 
-    // Map code as writable during load. Tightening permissions can be added once
-    // we have a dedicated remap/protect path.
     try as.mapAnonymous(USER_DEMO_CODE_VA, 1, USER_DEMO_LOAD_CODE_FLAGS);
 
     const stack_base = USER_DEMO_STACK_TOP - USER_DEMO_STACK_PAGES * mm.PAGE_SIZE;

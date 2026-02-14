@@ -99,6 +99,7 @@ export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
         log.err("Scheduler init failed: {any}", .{err});
         @panic("Scheduler init failed");
     };
+
     arch.idt.installSchedHooks(
         sched.tick,
         sched.needsResched,
@@ -106,6 +107,12 @@ export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
         sched.requestResched,
     );
     arch.idt.init();
+
+    // Spawn test userspace only after IDT is live so faults are diagnosable.
+    @import("user.zig").spawnDemoUserProcess(allocator) catch |err| {
+        log.err("User process error: {any}", .{err});
+    };
+
     arch.timer.calibrate(&smp_service.lapic);
     smp_service.bootAps(allocator) catch |err| {
         log.err("AP boot failed: {any}", .{err});
