@@ -44,7 +44,7 @@ pub const MapFlags = struct {
     pub const kernel_code = MapFlags{ .executable = true, .global = true };
     pub const kernel_data = MapFlags{ .writable = true, .global = true };
     pub const kernel_rodata = MapFlags{ .global = true };
-    pub const user_code = MapFlags{ .user = true, .exectuble = true };
+    pub const user_code = MapFlags{ .user = true, .executable = true };
     pub const user_data = MapFlags{ .user = true, .writable = true };
     pub const user_rodata = MapFlags{ .user = true };
     pub const user_stack = MapFlags{ .user = true, .writable = true };
