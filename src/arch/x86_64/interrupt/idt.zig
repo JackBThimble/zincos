@@ -102,15 +102,29 @@ pub fn init() void {
 }
 
 pub fn load() void {
-    const idtr = IdtPtr{
-        .limit = @sizeOf(@TypeOf(idt)) - 1,
-        .base = @intFromPtr(&idt),
-    };
-    asm volatile ("lidtq %[idtr]"
+    const limit: u16 = @intCast(@sizeOf(@TypeOf(idt)) - 1);
+    const base: u64 = @intFromPtr(&idt);
+
+    if (!isCanonical(base)) @panic("IDT base non-canonical");
+    if ((base & 0x7) != 0) @panic("IDT base not 8-byte aligned");
+
+    var idtr: [10]u8 = undefined;
+    idtr[0] = @truncate(limit);
+    idtr[1] = @truncate(limit >> 8);
+    inline for (0..8) |i| {
+        idtr[2 + i] = @truncate(base >> @intCast(i * 8));
+    }
+
+    asm volatile ("lidtq (%[ptr])"
         :
-        : [idtr] "m" (idtr),
-    );
+        : [ptr] "r" (&idtr[0]),
+        : .{ .memory = true });
     log.info("IDT loaded: {} entries", .{IDT_ENTRIES});
+}
+
+fn isCanonical(va: u64) bool {
+    const top = va >> 48;
+    return top == 0 or top == 0xffff;
 }
 
 pub fn setGate(vector: u8, handler_addr: usize, gate_type: GateType, dpl: u2, ist: u3) void {

@@ -139,18 +139,23 @@ pub const PerCpu = extern struct {
         }
 
         pub fn load(self: *const Gdt) void {
-            const gdtr = packed struct {
-                limit: u16,
-                base: u64,
-            }{
-                .limit = @sizeOf(@TypeOf(self.entries)) - 1,
-                .base = @intFromPtr(&self.entries),
-            };
+            const limit: u16 = @intCast(@sizeOf(@TypeOf(self.entries)) - 1);
+            const base: u64 = @intFromPtr(&self.entries);
 
-            asm volatile ("lgdtq %[gdtr]"
+            if (!isCanonical(base)) @panic("GDT base non-canonical");
+            if ((base & 0x7) != 0) @panic("GDT base not 8-byte aligned");
+
+            var gdtr: [10]u8 = undefined;
+            gdtr[0] = @truncate(limit);
+            gdtr[1] = @truncate(limit >> 8);
+            inline for (0..8) |i| {
+                gdtr[2 + i] = @truncate(base >> @intCast(i * 8));
+            }
+
+            asm volatile ("lgdtq (%[ptr])"
                 :
-                : [gdtr] "m" (gdtr),
-            );
+                : [ptr] "r" (&gdtr[0]),
+                : .{ .memory = true });
 
             gdt_reload_cs();
         }
@@ -205,4 +210,9 @@ pub fn getGsBase() u64 {
     );
 
     return (@as(u64, high) << 32) | low;
+}
+
+fn isCanonical(va: u64) bool {
+    const top = va >> 48;
+    return top == 0 or top == 0xffff;
 }
