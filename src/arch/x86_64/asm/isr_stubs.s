@@ -1,7 +1,16 @@
 # ==============================================================================
 # x86_64 ISR Stub Table
 # ==============================================================================
-
+#
+# Stack layout after stub pushes (before GP register saves):
+#   RSP+0:      vector number (pushed by stub)
+#   RSP+8:      error code    (pushed by stub or 0)
+#   RSP+16:     RIP           (pushed by hardware)
+#   RSP+24:     CS            (pushed by hardware)  <-- check RPL bits here
+#   RSP+32:     RFLAGS        (pushed by hardware) 
+#   RSP+40:     RSP           (pushed by hardware, always in 64-bit mode)
+#   RSP+48:     SS            (pushed by hardware, always in 64-bit mode)
+# ==============================================================================
 .text
 
 .extern interrupt_dispatch
@@ -29,6 +38,12 @@
 .endm
 
 isr_common:
+    # ----- swapgs on entry from user mode -----
+    # Check CS RPL bits at RSP+24 (vector=RSP+0, errcode=RSP+8, RIP=RSP+16, CS=RSP+24)
+    testl $3, 24(%rsp)
+    jz 1f
+    swapgs
+1:
     cli
     pushq %rax
     pushq %rbx
@@ -70,6 +85,13 @@ isr_common:
     popq %rbx
     popq %rax
 
+    # ---- swapgs on exit to user mode ----
+    # After popping GP regs, vector+error_code are still on stack.
+    # CS is at RSP+24 again (same layout as entry).
+    testl $3, 24(%rsp)
+    jz 2f
+    swapgs
+2:
     addq $16, %rsp
     iretq
 
