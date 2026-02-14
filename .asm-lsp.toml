@@ -1,0 +1,11 @@
+[[project]]
+path = "src/arch/x86_64/asm"
+version = "0.10.1"
+assembler = "gas"
+instruction_set = "x86/x86-64"
+
+[project.opts]
+compiler = "zig"
+compile_flags_txt = ["cc"]
+diagnostics = true
+default_diagnostics = false

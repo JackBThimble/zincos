@@ -26,7 +26,7 @@
 #   RFLAGS  = 0x202                 (IF=1, reserved bit 1 set)
 #   CS      = 0x1b                  (user code | RPL 3)
 #   RIP     = user entry point
-================================================================================
+# ==============================================================================
 
 .set USER_CS, 0x1b      # GDT index 3 (user code) | RPL 3
 .set USER_SS, 0x23      # GDT index 4 (user data) | RPL 3

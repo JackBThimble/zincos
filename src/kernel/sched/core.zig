@@ -6,6 +6,9 @@ const MAX_CPUS = shared.types.MAX_CPUS;
 const arch = @import("arch");
 const sched_arch = arch.sched;
 
+const mm = @import("mm");
+const address_space = mm.address_space;
+
 const task_mod = @import("task.zig");
 const Task = task_mod.Task;
 const TaskState = task_mod.TaskState;
@@ -108,6 +111,21 @@ pub fn createTask(
     return t;
 }
 
+/// Create a user mode task. The task starts in kernel mode running
+/// `userTaskEntry`, which sets up the address space and drops to ring 3.
+pub fn createUserTask(
+    addr_space_ptr: *address_space.AddressSpace,
+    user_entry: u64,
+    user_stack_top: u64,
+    prio: u5,
+) !*Task {
+    const t = try createTask(userTaskEntry, 0, prio);
+    t.addr_space = addr_space_ptr;
+    t.user_entry = user_entry;
+    t.user_stack_top = user_stack_top;
+    return t;
+}
+
 pub fn spawn(
     entry: sched_arch.TaskEntryFn,
     arg: usize,
@@ -126,6 +144,33 @@ pub fn spawn(
         t.tid,
         prio,
         target_cpu,
+    });
+
+    return t;
+}
+
+/// Spawn a user-mode task
+pub fn spawnUser(
+    addr_space_ptr: *address_space.AddressSpace,
+    user_entry: u64,
+    user_stack_top: u64,
+    prio: u5,
+    name: []const u8,
+) !*Task {
+    const t = try createUserTask(addr_space_ptr, user_entry, user_stack_top, prio);
+    t.setName(name);
+
+    const target_cpu = leastLoadedCpu();
+    t.cpu_id = target_cpu;
+    enqueueOn(target_cpu, t);
+
+    log.info("Spawned user task '{s}' tid={} prio={} -> CPU{} entry=0x{x} stack=0x{x}", .{
+        t.nameSlice(),
+        t.tid,
+        prio,
+        target_cpu,
+        user_entry,
+        user_stack_top,
     });
 
     return t;
@@ -161,6 +206,7 @@ pub fn schedule() void {
         cs.current = next;
         next.state = .running;
         next.time_slice = task_mod.timeSliceForPriority(next.priority);
+        prepareTaskSwitch(null, next);
         armCpuTimer(cs, next);
         cs.lock.release();
         sched_arch.loadContext(next.saved_sp);
@@ -186,10 +232,41 @@ pub fn schedule() void {
     cs.current = next;
     next.state = .running;
     next.time_slice = task_mod.timeSliceForPriority(next.priority);
+    prepareTaskSwitch(old, next);
     armCpuTimer(cs, next);
     cs.lock.release();
 
     sched_arch.switchContext(&old.saved_sp, next.saved_sp);
+}
+
+/// Prepares the CPU for running `next` task.
+/// Handles:
+///     - Saving arch-specific state for the outgoing user task
+///     - Address space activation
+///     - Restoring arch-specific state for the incoming user task
+fn prepareTaskSwitch(old: ?*Task, next: *Task) void {
+    // Save arch-specific state for outgoing user task
+    if (old) |o| {
+        if (o.isUserTask()) {
+            sched_arch.saveUserState(&o.arch_state);
+        }
+    }
+
+    // Activate the next task's address space
+    if (next.addr_space) |as| {
+        as.activate();
+    } else {
+        if (old) |o| {
+            if (o.isUserTask()) {
+                address_space.activateKernel();
+            }
+        }
+    }
+
+    // Restore arch-specific state for incoming user task
+    if (next.isUserTask()) {
+        sched_arch.loadUserState(&next.arch_state, next.kernelStackTop());
+    }
 }
 
 fn pickNext(cs: *CpuSched) *Task {
@@ -348,6 +425,30 @@ fn idleEntry(_: usize) callconv(.c) noreturn {
     while (true) {
         sched_arch.haltUntilInterrupt();
     }
+}
+
+/// Kernel entry point for user-mode tasks.
+/// The scheduler runs this as a normal kernel task. It activates the
+/// address space, then delegates to the arch layer to configure CPU and
+/// drop to user mode.
+fn userTaskEntry(_: usize) callconv(.c) noreturn {
+    const task = currentTask() orelse @panic("userTaskEntry: no current task");
+
+    const as = task.addr_space orelse @panic("userTaskEntry: task has no address space");
+
+    log.info("User task '{s}' (tid={}) entering user mode: entry=0x{x} stack=0x{x}", .{
+        task.nameSlice(),
+        task.tid,
+        task.user_entry,
+        task.user_stack_top,
+    });
+
+    // Activate user address space
+    as.activate();
+
+    // Arch layer handles CPU config and mode transition
+    // Never returns
+    sched_arch.enterInitialUserMode(task.kernelStackTop(), task.user_entry, task.user_stack_top);
 }
 
 pub fn startOnBsp() !void {

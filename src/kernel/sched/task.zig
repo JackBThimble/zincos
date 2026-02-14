@@ -3,6 +3,7 @@ const shared = @import("shared");
 const arch = @import("arch");
 const percpu = arch.percpu;
 const ipc = @import("../ipc/mod.zig");
+const address_space = @import("mm").address_space;
 
 pub const TaskState = enum(u8) {
     /// In a run queue, eligible for scheduling
@@ -119,6 +120,28 @@ pub const Task = struct {
     /// IPC state
     ipc: IpcState = .{},
 
+    // --- User-mode support
+    /// Address space for user-mode tasks. null for kernel threads.
+    /// When non-null, the scheduler will:
+    ///     - Load this task's CR3 on context switch
+    ///     - Update TSS.rsp0 for ring 0 re-entry
+    ///     - Save/restore KERNEL_GS_BASE
+    addr_space: ?*address_space.AddressSpace = null,
+
+    /// Architecture-specific per-task state for user-mode support.
+    /// On x86_64 this holds saved segment base registers, etc.
+    /// For kernel tasks this is unused (default-initialized).
+    arch_state: arch.sched.ArchTaskState = .{},
+
+    /// User-mode entry point address.
+    /// Set during process creation, consumed by the kernel entry
+    /// trampoline on first schedule to drop to user mode.
+    user_entry: u64 = 0,
+
+    /// User-mode initial stack pointer (top of user stack).
+    /// Set during process creation for initial transition to user mode.
+    user_stack_top: u64 = 0,
+
     pub fn setName(self: *Task, src: []const u8) void {
         const len = @min(src.len, self.name.len - 1);
         @memcpy(self.name[0..len], src[0..len]);
@@ -130,6 +153,18 @@ pub const Task = struct {
             if (c == 0) return self.name[0..i];
         }
         return &self.name;
+    }
+
+    /// Returns true if this task runs in user mode (has an address space).
+    pub fn isUserTask(self: *const Task) bool {
+        return self.addr_space != null;
+    }
+
+    /// Get the kernel stack top for privelege transitions.
+    /// The arch layer uses this to configure the CPU so that interrupts from
+    /// user mode land on this task's kernel stack.
+    pub fn kernelStackTop(self: *const Task) u64 {
+        return self.stack_base + self.stack_size;
     }
 };
 
