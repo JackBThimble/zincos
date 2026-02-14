@@ -266,7 +266,7 @@ pub const KHeap = struct {
                 return false;
             };
 
-            self.mapper.map4k(self.mapped_end, frame, HEAP_PAGE_FLAGS);
+            self.mapper.mapKernel4k(self.mapped_end, frame, HEAP_PAGE_FLAGS);
         }
 
         if (wilderness_consumed) {
@@ -396,7 +396,7 @@ pub const KHeap = struct {
         var mapped: u64 = 0;
         while (mapped < initial_pages) : (mapped += pmm.PAGE_SIZE) {
             const frame = mapper.allocFrame() orelse @panic("[KHeap.init] Failed to allocate initial frame");
-            mapper.map4k(heap_base + mapped, frame, HEAP_PAGE_FLAGS);
+            mapper.mapKernel4k(heap_base + mapped, frame, HEAP_PAGE_FLAGS);
         }
         self.mapped_end = heap_base + mapped;
 
