@@ -53,6 +53,25 @@ var mapper: ?vmm.Mapper = null;
 /// change this value.
 pub const USER_ADDR_MAX: u64 = 0x0000_7fff_ffff_ffff;
 
+/// Allocate a physical frame from the global mapper.
+pub fn allocPhysFrame() ?u64 {
+    const m = mapper orelse return null;
+    return m.allocFrame();
+}
+
+/// Free a physical frame back to the global mapper.
+pub fn freePhysFrame(phys: u64) void {
+    const m = mapper orelse return;
+    m.freeFrame(phys);
+}
+
+/// Zero one physical frame via HHDM mapping.
+pub fn zeroPhysFrame(phys: u64) void {
+    const m = mapper orelse return;
+    const p: [*]u8 = @ptrFromInt(m.hhdmBase() + phys);
+    @memset(p[0..@as(usize, @intCast(PAGE_SIZE))], 0);
+}
+
 // =============================================================================
 // Initialization
 // =============================================================================

@@ -7,6 +7,7 @@
 //! ipc.receive(ep_id)              - blocking receive -> {msg, caller}
 //! ipc.call(ep_id, &msg, &reply)   - send + wait for reply
 //! ipc.reply(caller, &msg)         - reply to a caller from call()
+//! ipc.notify(ep_id)               - async notification (no payload)
 
 const std = @import("std");
 const shared = @import("shared");
@@ -49,4 +50,9 @@ pub fn call(ep_id: EndpointId, msg: *const Message, reply_buf: *Message) !void {
 
 pub fn reply(caller: *Task, msg: *const Message) void {
     Endpoint.reply(caller, msg);
+}
+
+pub fn notify(ep_id: EndpointId) !void {
+    const ep = registry.lookup(ep_id) orelse return error.InvalidEndpoint;
+    return ep.notify();
 }

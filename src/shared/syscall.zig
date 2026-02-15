@@ -17,6 +17,13 @@ pub const Number = enum(u64) {
     ipc_receive = 18,
     ipc_call = 19,
     ipc_reply = 20,
+    ipc_notify = 21,
+
+    shm_create = 22,
+    shm_grant = 23,
+    shm_map = 24,
+    shm_unmap = 25,
+    shm_destroy = 26,
 };
 
 pub const Errno = enum(i64) {

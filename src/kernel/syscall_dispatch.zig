@@ -5,6 +5,7 @@ const shared = @import("shared");
 const ipc = @import("ipc/mod.zig");
 const process = @import("process/mod.zig");
 const sched = @import("sched/core.zig");
+const shm = @import("shm.zig");
 const IpcHandle = ipc.handles.Handle;
 
 const sc = shared.syscall;
@@ -20,6 +21,10 @@ fn retErr(code: sc.Errno) u64 {
 
 fn parseHandle(raw: u64) ?IpcHandle {
     return std.math.cast(IpcHandle, raw);
+}
+
+fn parseShmId(raw: u64) ?shm.ShmId {
+    return std.math.cast(shm.ShmId, raw);
 }
 
 fn parseMsgPtr(raw: u64) ?*ipc.Message {
@@ -48,6 +53,17 @@ fn mapEndpointError(err: anyerror) sc.Errno {
     return switch (err) {
         error.InvalidEndpoint => .INVAL,
         error.EndpointClosed => .PIPE,
+        else => .INVAL,
+    };
+}
+
+fn mapShmError(err: anyerror) sc.Errno {
+    return switch (err) {
+        error.NotInitialized => .NODEV,
+        error.OutOfMemory => .NOMEM,
+        error.InvalidSegment, error.InvalidSize, error.UnalignedAddress, error.NotMapped, error.MappingCorrupted => .INVAL,
+        error.PermissionDenied => .BADF,
+        error.OutOfIds, error.OutOfHandles, error.Busy, error.AlreadMapped => .AGAIN,
         else => .INVAL,
     };
 }
@@ -157,6 +173,52 @@ pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
             const caller = ipc.handles.consumeCaller(pid, caller_handle) orelse return retErr(.BADF);
 
             ipc.reply(caller, reply);
+            return 0;
+        },
+        @intFromEnum(sc.Number.ipc_notify) => {
+            const endpoint_handle = parseHandle(frame.rdi) orelse return retErr(.INVAL);
+            const pid = process.currentPid();
+            const ep_id = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.send) orelse return retErr(.BADF);
+
+            ipc.notify(ep_id) catch |err| return retErr(mapEndpointError(err));
+            return 0;
+        },
+        @intFromEnum(sc.Number.shm_create) => {
+            const size_bytes: usize = std.math.cast(usize, frame.rdi) orelse return retErr(.INVAL);
+            const pid = process.currentPid();
+            const id = shm.create(pid, size_bytes) catch |err| return retErr(mapShmError(err));
+            return @as(u64, id);
+        },
+        @intFromEnum(sc.Number.shm_grant) => {
+            const id = parseShmId(frame.rdi) orelse return retErr(.INVAL);
+            const target_pid: process.ProcessId = std.math.cast(process.ProcessId, frame.rsi) orelse return retErr(.INVAL);
+
+            const pid = process.currentPid();
+            shm.grant(id, pid, target_pid) catch |err| return retErr(mapShmError(err));
+            return 0;
+        },
+        @intFromEnum(sc.Number.shm_map) => {
+            const id = parseShmId(frame.rdi) orelse return retErr(.INVAL);
+            const virt = frame.rsi;
+            const pid = process.currentPid();
+            const task = sched.currentTask() orelse return retErr(.INVAL);
+            const as = task.addr_space orelse return retErr(.INVAL);
+            shm.mapCurrent(id, pid, as, virt) catch |err| return retErr(mapShmError(err));
+            return 0;
+        },
+        @intFromEnum(sc.Number.shm_unmap) => {
+            const id = parseShmId(frame.rdi) orelse return retErr(.INVAL);
+            const virt = frame.rsi;
+            const pid = process.currentPid();
+            const task = sched.currentTask() orelse return retErr(.INVAL);
+            const as = task.addr_space orelse return retErr(.INVAL);
+            shm.unmapCurrent(id, pid, as, virt) catch |err| return retErr(mapShmError(err));
+            return 0;
+        },
+        @intFromEnum(sc.Number.shm_destroy) => {
+            const id = parseShmId(frame.rdi) orelse return retErr(.INVAL);
+            const pid = process.currentPid();
+            shm.destroy(id, pid) catch |err| return retErr(mapShmError(err));
             return 0;
         },
         else => return retErr(.NOSYS),

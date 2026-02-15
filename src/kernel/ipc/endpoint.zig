@@ -98,6 +98,7 @@ pub const Endpoint = struct {
     lock: SpinLock = .{},
     send_queue: WaitQueue = .{},
     recv_queue: WaitQueue = .{},
+    pending_notifications: u64 = 0,
     alive: bool = true,
 
     pub fn init(id: u32) Endpoint {
@@ -145,6 +146,35 @@ pub const Endpoint = struct {
         sched_arch.restoreIrq(flags);
     }
 
+    pub fn notify(self: *Endpoint) error{EndpointClosed}!void {
+        const flags = sched_arch.disableIrq();
+        self.lock.acquire();
+
+        if (!self.alive) {
+            self.lock.release();
+            sched_arch.restoreIrq(flags);
+            return error.EndpointClosed;
+        }
+
+        self.pending_notifications +%= 1;
+
+        if (self.recv_queue.dequeue()) |receiver| {
+            var notify_msg = Message.init(0xffff_fffe, 1);
+            notify_msg.data[0] = self.pending_notifications;
+            receiver.ipc.msg = notify_msg;
+            receiver.ipc.caller = null;
+            self.pending_notifications -= 1;
+
+            self.lock.release();
+            sched_arch.restoreIrq(flags);
+            sched.wake(receiver);
+            return;
+        }
+
+        self.lock.release();
+        sched_arch.restoreIrq(flags);
+    }
+
     // =========================================================================
     // receive - blocking receive, returns message + caller handle
     // =========================================================================
@@ -163,6 +193,20 @@ pub const Endpoint = struct {
             self.lock.release();
             sched_arch.restoreIrq(flags);
             return error.EndpointClosed;
+        }
+
+        if (self.pending_notifications != 0) {
+            self.pending_notifications -= 1;
+            self.lock.release();
+            sched_arch.restoreIrq(flags);
+
+            return ReceiveResult{
+                .msg = Message{
+                    .tag = @as(u64, 0xffff_fffe) | (@as(u64, 1) << 32),
+                    .data = .{ 1, 0, 0, 0, 0, 0 },
+                },
+                .caller = null,
+            };
         }
 
         // Hot path: sender already waiting

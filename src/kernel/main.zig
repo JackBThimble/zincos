@@ -18,6 +18,7 @@ const mm = @import("mm");
 const sched = @import("sched/core.zig");
 const ipc = @import("ipc/mod.zig");
 const process = @import("process/mod.zig");
+const shm = @import("shm.zig");
 const syscall_dispatch = @import("syscall_dispatch.zig");
 
 pub const std_options: std.Options = .{
@@ -106,6 +107,7 @@ pub export fn kernel_main(boot_info: *shared.boot.BootInfo) callconv(.c) noretur
 
     const allocator = kheap_global.allocator();
     ipc.init(allocator);
+    shm.init(allocator);
     process.init(allocator);
 
     var smp_service: arch.smp.Service = undefined;
