@@ -5,7 +5,7 @@ const shared = @import("shared");
 const ipc = @import("ipc/mod.zig");
 const process = @import("process/mod.zig");
 const sched = @import("sched/core.zig");
-const Task = @import("sched/task.zig").Task;
+const IpcHandle = ipc.handles.Handle;
 
 const sc = shared.syscall;
 const SyscallFrame = arch.syscall.SyscallFrame;
@@ -18,13 +18,8 @@ fn retErr(code: sc.Errno) u64 {
     return sc.encodeErrno(code);
 }
 
-fn parseEndpointId(raw: u64) ?ipc.EndpointId {
-    return std.math.cast(ipc.EndpointId, raw);
-}
-
-fn parseTaskPtr(raw: u64) ?*Task {
-    if (raw == 0) return null;
-    return @ptrFromInt(raw);
+fn parseHandle(raw: u64) ?IpcHandle {
+    return std.math.cast(IpcHandle, raw);
 }
 
 fn parseMsgPtr(raw: u64) ?*ipc.Message {
@@ -42,6 +37,9 @@ fn mapCreateError(err: anyerror) sc.Errno {
         error.NotInitialized => .NODEV,
         error.OutOfMemory => .NOMEM,
         error.OutOfEndpoints => .AGAIN,
+        error.PermissionDenied => .BADF,
+        error.InvalidEndpoint => .BADF,
+        error.OutOfHandles => .AGAIN,
         else => .INVAL,
     };
 }
@@ -97,41 +95,66 @@ pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
             return @as(u64, @intCast(len));
         },
         @intFromEnum(sc.Number.ipc_create_endpoint) => {
-            const ep = ipc.createEndpoint() catch |err| return retErr(mapCreateError(err));
-            return @as(u64, ep);
+            const pid = process.currentPid();
+            const ep = ipc.createEndpoint(pid) catch |err| return retErr(mapCreateError(err));
+            const handle = ipc.handles.installEndpoint(pid, ep) catch |err| return switch (err) {
+                error.NotInitialized => retErr(.NODEV),
+                error.OutOfMemory => retErr(.NOMEM),
+                error.OutOfHandles => retErr(.AGAIN),
+                error.PermissionDenied, error.InvalidEndpoint => retErr(.BADF),
+            };
+            return @as(u64, handle);
         },
         @intFromEnum(sc.Number.ipc_send) => {
-            const ep_id = parseEndpointId(frame.rdi) orelse return retErr(.INVAL);
+            const endpoint_handle = parseHandle(frame.rdi) orelse return retErr(.INVAL);
             const msg = parseMsgPtrConst(frame.rsi) orelse return retErr(.FAULT);
+            const pid = process.currentPid();
+            const ep_id = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.send) orelse return retErr(.BADF);
 
             ipc.send(ep_id, msg) catch |err| return retErr(mapEndpointError(err));
             return 0;
         },
         @intFromEnum(sc.Number.ipc_receive) => {
-            const ep_id = parseEndpointId(frame.rdi) orelse return retErr(.INVAL);
+            const endpoint_handle = parseHandle(frame.rdi) orelse return retErr(.INVAL);
             const out_msg = parseMsgPtr(frame.rsi) orelse return retErr(.FAULT);
+            const pid = process.currentPid();
+            const ep_id = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.receive) orelse return retErr(.BADF);
 
             const res = ipc.receive(ep_id) catch |err| return retErr(mapEndpointError(err));
             out_msg.* = res.msg;
 
             if (frame.rdx != 0) {
                 const out_caller: *u64 = @ptrFromInt(frame.rdx);
-                out_caller.* = if (res.caller) |caller| @intFromPtr(caller) else 0;
+                if (res.caller) |caller| {
+                    const caller_handle = ipc.handles.installCaller(pid, caller) catch |err| return switch (err) {
+                        error.OutOfMemory => retErr(.NOMEM),
+                        error.OutOfHandles => retErr(.AGAIN),
+                        else => retErr(.INVAL),
+                    };
+                    out_caller.* = caller_handle;
+                } else {
+                    out_caller.* = 0;
+                }
             }
 
             return 0;
         },
         @intFromEnum(sc.Number.ipc_call) => {
-            const ep_id = parseEndpointId(frame.rdi) orelse return retErr(.INVAL);
+            const endpoint_handle = parseHandle(frame.rdi) orelse return retErr(.INVAL);
             const req = parseMsgPtrConst(frame.rsi) orelse return retErr(.FAULT);
             const reply = parseMsgPtr(frame.rdx) orelse return retErr(.FAULT);
+            const pid = process.currentPid();
+            const ep_id = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.call) orelse return retErr(.BADF);
 
-            ipc.call(ep_id, req, reply) catch |err| return retErr(mapEndpointError(err));
+            ipc.call(ep_id, req, reply) catch |err|
+                return retErr(mapEndpointError(err));
             return 0;
         },
         @intFromEnum(sc.Number.ipc_reply) => {
-            const caller = parseTaskPtr(frame.rdi) orelse return retErr(.FAULT);
+            const caller_handle = parseHandle(frame.rdi) orelse return retErr(.INVAL);
             const reply = parseMsgPtrConst(frame.rsi) orelse return retErr(.FAULT);
+            const pid = process.currentPid();
+            const caller = ipc.handles.consumeCaller(pid, caller_handle) orelse return retErr(.BADF);
 
             ipc.reply(caller, reply);
             return 0;

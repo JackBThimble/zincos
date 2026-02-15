@@ -9,7 +9,7 @@
 const std = @import("std");
 const shared = @import("shared");
 const log = shared.log;
-
+const process = @import("../process/mod.zig");
 const Endpoint = @import("endpoint.zig").Endpoint;
 
 pub const EndpointId = u32;
@@ -33,19 +33,19 @@ const SpinLock = struct {
 
 var lock: SpinLock = .{};
 var table: [MAX_ENDPOINTS]?*Endpoint = [_]?*Endpoint{null} ** MAX_ENDPOINTS;
+var owner_table: [MAX_ENDPOINTS]process.ProcessId = [_]process.ProcessId{0} ** MAX_ENDPOINTS;
 var next_id: EndpointId = 1;
 var allocator: ?std.mem.Allocator = null;
 
 pub fn init(alloc: std.mem.Allocator) void {
     allocator = alloc;
+    table = [_]?*Endpoint{null} ** MAX_ENDPOINTS;
+    owner_table = [_]process.ProcessId{0} ** MAX_ENDPOINTS;
+    next_id = 1;
     log.info("IPC registry initialized: {} endpoint slots", .{MAX_ENDPOINTS});
 }
 
-// =============================================================================
-// Create / Destroy / Lookup
-// =============================================================================
-
-pub fn create() !EndpointId {
+pub fn create(owner_pid: process.ProcessId) !EndpointId {
     const alloc = allocator orelse return error.NotInitialized;
 
     lock.acquire();
@@ -67,10 +67,11 @@ pub fn create() !EndpointId {
     const ep = alloc.create(Endpoint) catch return error.OutOfMemory;
     ep.* = Endpoint.init(id);
     table[id] = ep;
+    owner_table[id] = owner_pid;
 
     next_id = id + 1;
 
-    log.debug("IPC endpoint created: id={}", .{id});
+    log.debug("IPC endpoint created: id={} owner_pid={}", .{ id, owner_pid });
     return id;
 }
 
@@ -84,10 +85,9 @@ pub fn destroy(id: EndpointId) void {
     };
 
     table[id] = null;
+    owner_table[id] = 0;
     lock.release();
 
-    // Destroy wakes all waiters - must be done outside registry lock
-    // to avoid lock inversion (endpoint lock -> scheduler lock)
     ep.destroy();
     alloc.destroy(ep);
 
@@ -96,9 +96,13 @@ pub fn destroy(id: EndpointId) void {
 
 pub fn lookup(id: EndpointId) ?*Endpoint {
     if (id == INVALID_EP or id >= MAX_ENDPOINTS) return null;
-
-    // No lock needed for read - pointer is stable once set.
-    // Caller must handle the endpoint being destroyed between
-    // lookup and use (the endpoint's own lock handles that).
     return table[id];
+}
+
+pub fn ownerOf(id: EndpointId) ?process.ProcessId {
+    if (id == INVALID_EP or id >= MAX_ENDPOINTS) return null;
+    if (table[id] == null) return null;
+    const owner = owner_table[id];
+    if (owner == 0) return null;
+    return owner;
 }
