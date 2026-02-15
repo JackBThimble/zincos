@@ -31,8 +31,8 @@ const IA32_EFER: u32 = 0xc000_0080;
 // Segment selectors (must match GDT)
 const KERNEL_CS: u64 = 0x08;
 const KERNEL_DS: u64 = 0x10;
-const USER_CS: u64 = 0x18; // must be KERNEL_CS + 16 for SYSRET
-const USER_DS: u64 = 0x20; // must be USER_CS + 8 for SYSRET
+const USER_DS: u64 = 0x18; // user data descriptor index (RPL stripped)
+const USER_CS: u64 = 0x20; // user code descriptor index (RPL stripped)
 
 const FMASK_IF: u64 = 1 << 9; // clear IF (disable interrupts)
 const FMASK_DF: u64 = 1 << 10; // clear DF (direction flag)
@@ -97,9 +97,10 @@ pub fn init() void {
     //      bits [47:32] = kernel CS (SYSCALL loads CS from here, SS = CS+8)
     //      bits [63:48] = user CS base (SYSRET loads CS = base + 16, SS = base + 8)
     //
-    // For SYSRET to work correctly:
+    // For SYSRET in long mode:
     //      User CS = STAR[63:48] + 16
     //      User SS = STAR[63:48] + 8
+    // So user data must be one descriptor (8 bytes) below user code.
     const star = (KERNEL_CS << 32) | ((USER_CS - 16) << 48);
     writeMsr(IA32_STAR, star);
 

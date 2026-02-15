@@ -3,11 +3,16 @@ const arch = @import("arch");
 const shared = @import("shared");
 
 const ipc = @import("ipc/mod.zig");
+const process = @import("process/mod.zig");
 const sched = @import("sched/core.zig");
 const Task = @import("sched/task.zig").Task;
 
 const sc = shared.syscall;
 const SyscallFrame = arch.syscall.SyscallFrame;
+
+const SERIAL_STDIN_FD: u64 = 0;
+const SERIAL_STDOUT_FD: u64 = 1;
+const SERIAL_STDERR_FD: u64 = 2;
 
 fn retErr(code: sc.Errno) u64 {
     return sc.encodeErrno(code);
@@ -49,6 +54,11 @@ fn mapEndpointError(err: anyerror) sc.Errno {
     };
 }
 
+fn badFd(fd: u64, for_read: bool) bool {
+    if (for_read) return fd != SERIAL_STDIN_FD;
+    return fd != SERIAL_STDOUT_FD and fd != SERIAL_STDERR_FD;
+}
+
 /// Kernel-side syscall implementation.
 /// Called indirectly from arch.syscall.syscall_dispatch.
 pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
@@ -58,6 +68,33 @@ pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
         @intFromEnum(sc.Number.sched_yield) => {
             sched.yield();
             return 0;
+        },
+        @intFromEnum(sc.Number.get_pid) => return @as(u64, process.currentPid()),
+        @intFromEnum(sc.Number.sys_read) => {
+            const fd = frame.rdi;
+            const buf_ptr = frame.rsi;
+            const len: usize = std.math.cast(usize, frame.rdx) orelse return retErr(.INVAL);
+
+            if (badFd(fd, true)) return retErr(.BADF);
+            if (buf_ptr == 0) return retErr(.FAULT);
+
+            const out: [*]u8 = @ptrFromInt(buf_ptr);
+            if (len == 0) return 0;
+
+            // TODO: wire real keyboard/console input. For now return EOF.
+            _ = out;
+            return 0;
+        },
+        @intFromEnum(sc.Number.sys_write) => {
+            const fd = frame.rdi;
+            const buf_ptr = frame.rsi;
+            const len: usize = std.math.cast(usize, frame.rdx) orelse return retErr(.INVAL);
+            if (badFd(fd, false)) return retErr(.BADF);
+            if (buf_ptr == 0 and len != 0) return retErr(.FAULT);
+
+            const bytes: []const u8 = @as([*]const u8, @ptrFromInt(buf_ptr))[0..len];
+            arch.serial.write(bytes);
+            return @as(u64, @intCast(len));
         },
         @intFromEnum(sc.Number.ipc_create_endpoint) => {
             const ep = ipc.createEndpoint() catch |err| return retErr(mapCreateError(err));

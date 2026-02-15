@@ -169,6 +169,6 @@ inline fn writeMsr(msr: u32, value: u64) void {
 /// and the per-CPU kernel_stack field.
 pub fn updateKernelStack(kernel_stack_top: u64) void {
     const p = percpu.getPerCpu();
-    p.tss.rsp0 = kernel_stack_top;
+    p.tss.setRsp0(kernel_stack_top);
     p.kernel_stack = kernel_stack_top;
 }

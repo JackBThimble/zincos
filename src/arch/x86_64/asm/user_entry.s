@@ -11,8 +11,8 @@
 # GDT selectors (must match PerCpu.Gdt):
 #   0x08 = kernel code  (ring 0)
 #   0x10 = kernel data  (ring 0)
-#   0x18 = user code    (ring 3) -> selector = 0x18 | 3 = 0x1b
-#   0x20 = user data    (ring 3) -> selector = 0x20 | 3 = 0x23
+#   0x18 = user data    (ring 3) -> selector = 0x18 | 3 = 0x1b
+#   0x20 = user code    (ring 3) -> selector = 0x20 | 3 = 0x23
 #
 # Before iretq, swapgs so that:
 #   - GS_BASE becomes user's GS (was in KERNEL_GS_BASE, set to 0 by caller)
@@ -21,15 +21,15 @@
 # pointer back into GS_BASE.
 #
 # iretq frame (pushed in reverse order):
-#   SS      = 0x23                  (user data | RPL 3)
+#   SS      = 0x1b                  (user data | RPL 3)
 #   RSP     = user stack pointer
 #   RFLAGS  = 0x202                 (IF=1, reserved bit 1 set)
-#   CS      = 0x1b                  (user code | RPL 3)
+#   CS      = 0x23                  (user code | RPL 3)
 #   RIP     = user entry point
 # ==============================================================================
 
-.set USER_CS, 0x1b      # GDT index 3 (user code) | RPL 3
-.set USER_SS, 0x23      # GDT index 4 (user data) | RPL 3
+.set USER_CS, 0x23      # GDT index 4 (user code) | RPL 3
+.set USER_SS, 0x1b      # GDT index 3 (user data) | RPL 3
 .set RFLAGS_IF, 0x202   # IF=1, bit1=1 (reserved, always set)
 
 .text

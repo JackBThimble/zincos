@@ -72,20 +72,48 @@ pub const PerCpu = extern struct {
 
     pub const Tss = extern struct {
         reserved0: u32 = 0,
-        rsp0: u64 = 0, // Kernel stack for ring 0
-        rsp1: u64 = 0, // Kernel stack for ring 1
-        rsp2: u64 = 0, // Kernel stack for ring 2
-        reserved1: u64 = 0,
-        ist1: u64 = 0, // Interrupt stacks
-        ist2: u64 = 0,
-        ist3: u64 = 0,
-        ist4: u64 = 0,
-        ist5: u64 = 0,
-        ist6: u64 = 0,
-        ist7: u64 = 0,
-        reserved2: u64 = 0,
+        rsp0: [2]u32 = .{ 0, 0 }, // Kernel stack for ring 0 (low, high)
+        rsp1: [2]u32 = .{ 0, 0 }, // Kernel stack for ring 1
+        rsp2: [2]u32 = .{ 0, 0 }, // Kernel stack for ring 2
+        reserved1: [2]u32 = .{ 0, 0 },
+        ist1: [2]u32 = .{ 0, 0 }, // Interrupt stack table entries
+        ist2: [2]u32 = .{ 0, 0 },
+        ist3: [2]u32 = .{ 0, 0 },
+        ist4: [2]u32 = .{ 0, 0 },
+        ist5: [2]u32 = .{ 0, 0 },
+        ist6: [2]u32 = .{ 0, 0 },
+        ist7: [2]u32 = .{ 0, 0 },
+        reserved2: [2]u32 = .{ 0, 0 },
         reserved3: u16 = 0,
         iomap_base: u16 = @sizeOf(Tss),
+
+        pub inline fn setRsp0(self: *Tss, value: u64) void {
+            self.rsp0[0] = @truncate(value);
+            self.rsp0[1] = @truncate(value >> 32);
+        }
+
+        pub inline fn getRsp0(self: *const Tss) u64 {
+            return (@as(u64, self.rsp0[1]) << 32) | @as(u64, self.rsp0[0]);
+        }
+
+        comptime {
+            if (@sizeOf(Tss) != 104) @compileError("x86_64 TSS must be 104 bytes");
+            if (@offsetOf(Tss, "reserved0") != 0) @compileError("TSS reserved0 offset wrong");
+            if (@offsetOf(Tss, "rsp0") != 4) @compileError("TSS rsp0 offset wrong");
+            if (@offsetOf(Tss, "rsp1") != 12) @compileError("TSS rsp1 offset wrong");
+            if (@offsetOf(Tss, "rsp2") != 20) @compileError("TSS rsp2 offset wrong");
+            if (@offsetOf(Tss, "reserved1") != 28) @compileError("TSS reserved1 offset wrong");
+            if (@offsetOf(Tss, "ist1") != 36) @compileError("TSS ist1 offset wrong");
+            if (@offsetOf(Tss, "ist2") != 44) @compileError("TSS ist2 offset wrong");
+            if (@offsetOf(Tss, "ist3") != 52) @compileError("TSS ist3 offset wrong");
+            if (@offsetOf(Tss, "ist4") != 60) @compileError("TSS ist4 offset wrong");
+            if (@offsetOf(Tss, "ist5") != 68) @compileError("TSS ist5 offset wrong");
+            if (@offsetOf(Tss, "ist6") != 76) @compileError("TSS ist6 offset wrong");
+            if (@offsetOf(Tss, "ist7") != 84) @compileError("TSS ist7 offset wrong");
+            if (@offsetOf(Tss, "reserved2") != 92) @compileError("TSS reserved2 offset wrong");
+            if (@offsetOf(Tss, "reserved3") != 100) @compileError("TSS reserved3 offset wrong");
+            if (@offsetOf(Tss, "iomap_base") != 102) @compileError("TSS iomap_base offset wrong");
+        }
     };
 
     pub const Gdt = extern struct {
@@ -95,8 +123,8 @@ pub const PerCpu = extern struct {
             null_segment = 0, // First segment MUST be null
             kernel_code = 1,
             kernel_data = 2,
-            user_code = 3,
-            user_data = 4,
+            user_data = 3,
+            user_code = 4,
             tss_low = 5,
             tss_high = 6,
         };
@@ -107,8 +135,8 @@ pub const PerCpu = extern struct {
                     0x0000_0000_0000_0000, // NULL
                     0x00af_9a00_0000_ffff, // Kernel code (64-bit)
                     0x00af_9200_0000_ffff, // Kernel data
-                    0x00af_fa00_0000_ffff, // User code (64-bit)
                     0x00af_f200_0000_ffff, // User data
+                    0x00af_fa00_0000_ffff, // User code (64-bit)
                     0, // TSS low (filled later)
                     0, // TSS high (filled later)
                     0, // Reserved

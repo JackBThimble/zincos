@@ -8,6 +8,9 @@ pub const Number = enum(u64) {
     nop = 0,
     get_cpu_id = 1,
     sched_yield = 2,
+    sys_read = 3,
+    sys_write = 4,
+    get_pid = 5,
 
     ipc_create_endpoint = 16,
     ipc_send = 17,
@@ -17,6 +20,7 @@ pub const Number = enum(u64) {
 };
 
 pub const Errno = enum(i64) {
+    BADF = 9,
     AGAIN = 11,
     NOMEM = 12,
     FAULT = 14,

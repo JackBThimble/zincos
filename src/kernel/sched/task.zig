@@ -89,6 +89,7 @@ pub const IpcState = struct {
 pub const Task = struct {
     // --- Identity ---
     tid: u32,
+    pid: u32 = 0,
     name: [32]u8 = [_]u8{0} ** 32,
 
     // --- Scheduling state ---

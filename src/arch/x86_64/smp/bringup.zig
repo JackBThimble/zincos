@@ -49,7 +49,7 @@ fn bootOne(
 ) !void {
     const stack = try allocator.alignedAlloc(u8, std.mem.Alignment.@"16", AP_STACK_SIZE);
     cpu.kernel_stack = @intFromPtr(stack.ptr) + stack.len;
-    cpu.tss.rsp0 = cpu.kernel_stack;
+    cpu.tss.setRsp0(cpu.kernel_stack);
     cpu.gdt.setTss(&cpu.tss);
 
     const lapic = apic.local();
