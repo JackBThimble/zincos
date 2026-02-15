@@ -127,6 +127,7 @@ pub export fn kernel_main(boot_info: *shared.boot.BootInfo) callconv(.c) noretur
         sched.needsResched,
         sched.schedule,
         sched.requestResched,
+        sched.onUserException,
     );
     arch.idt.init();
 

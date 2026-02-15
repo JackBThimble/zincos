@@ -72,22 +72,26 @@ const TickFn = *const fn () void;
 const NeedsReschedFn = *const fn () bool;
 const ScheduleFn = *const fn () void;
 const RequestReschedFn = *const fn () void;
+const UserExceptionFn = *const fn (vec: u8, err: u64, rip: u64, cr2: u64) void;
 
 var tick_fn: ?TickFn = null;
 var needs_resched_fn: ?NeedsReschedFn = null;
 var schedule_fn: ?ScheduleFn = null;
 var request_resched_fn: ?RequestReschedFn = null;
+var user_exception_fn: ?UserExceptionFn = null;
 
 pub fn installSchedHooks(
     tick: TickFn,
     needs_resched: NeedsReschedFn,
     sched: ScheduleFn,
     request_resched: RequestReschedFn,
+    user_exception: UserExceptionFn,
 ) void {
     tick_fn = tick;
     needs_resched_fn = needs_resched;
     schedule_fn = sched;
     request_resched_fn = request_resched;
+    user_exception_fn = user_exception;
 }
 
 // =============================================================================
@@ -168,6 +172,14 @@ pub export fn sched_check_preempt() callconv(.c) void {
 
 fn handleException(frame: *const InterruptFrame) void {
     const vec: u8 = @truncate(frame.vector);
+    const cr2 = if (vec == 14) readCr2() else 0;
+
+    if (fromUser(frame)) {
+        if (user_exception_fn) |f| {
+            f(vec, frame.error_code, frame.rip, cr2);
+            return; // ssched_check_preempt runs right after dispatch
+        }
+    }
     const names = [_][]const u8{
         "#DE", "#DB", "NMI", "#BP", "#OF", "#BR", "#UD", "#NM",
         "#DF", "??",  "#TS", "#NP", "#SS", "#GP", "#PF", "??",
@@ -183,10 +195,6 @@ fn handleException(frame: *const InterruptFrame) void {
     log.err("   RSP=0x{x} RAX=0x{x} RBX = 0x{x}", .{ frame.rsp, frame.rax, frame.rbx });
 
     if (vec == 14) {
-        var cr2: u64 = undefined;
-        asm volatile ("movq %%cr2, %[cr2]"
-            : [cr2] "=r" (cr2),
-        );
         log.err("   CR2=0x{x}", .{cr2});
     }
 
@@ -205,4 +213,16 @@ fn handleResched() void {
 
 fn sendEoi() void {
     apic.local().sendEoi();
+}
+
+fn readCr2() u64 {
+    var cr2: u64 = undefined;
+    asm volatile ("movq %%cr2, %[v]"
+        : [v] "=r" (cr2),
+    );
+    return cr2;
+}
+
+fn fromUser(frame: *const InterruptFrame) bool {
+    return (frame.cs & 0x3) == 0x3;
 }

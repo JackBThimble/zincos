@@ -486,3 +486,18 @@ pub fn startOnAp() void {
 
     log.debug("Scheduler started on AP (CPU{})", .{cpu_id});
 }
+
+pub fn onUserException(vec: u8, err: u64, rip: u64, cr2: u64) void {
+    const cpu_id = sched_arch.getCpuId();
+    const cs = &cpu_scheds[cpu_id];
+    const curr = cs.current orelse @panic("user exception: no current task");
+
+    if (!curr.isUserTask()) @panic("user exception on non-user task");
+
+    log.warn("Killing user task '{s}' tid={} vec={} err=0x{x} rip=0x{x} cr2=0x{x}", .{
+        curr.nameSlice(), curr.tid, vec, err, rip, cr2,
+    });
+
+    curr.state = .dead;
+    cs.need_resched = true;
+}
