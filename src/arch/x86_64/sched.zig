@@ -65,18 +65,19 @@ pub fn prepareContext(
     arg: usize,
 ) u64 {
     const stack_top = stack_base + stack_size;
-    const frame_start = stack_top - (9 * 8);
+    const frame_start = stack_top - (8 * 8);
     const frame = @as([*]u64, @ptrFromInt(frame_start));
 
-    frame[8] = 0; // alignment
-    frame[7] = @intFromPtr(&taskEntryTrampoline); // return addr
-    frame[6] = 0x202; // rflags: IF=1
-    frame[5] = 0; // r15
-    frame[4] = 0; // r14
+    // Must match load_context_asm restore order:
+    // popfq, r15, r14, r13, r12, rbx, rbp, ret
+    frame[0] = 0x202; // rflags: IF=1
+    frame[1] = 0; // r15
+    frame[2] = 0; // r14
     frame[3] = 0; // r13
-    frame[2] = @intFromPtr(entry); // r12 = entry fn
-    frame[1] = arg; // rbx = arg
-    frame[0] = 0; // rbp
+    frame[4] = @intFromPtr(entry); // r12 = task entry fn
+    frame[5] = arg; // rbx = arg
+    frame[6] = 0; // rbp
+    frame[7] = @intFromPtr(&taskEntryTrampoline); // return addr
 
     return frame_start;
 }

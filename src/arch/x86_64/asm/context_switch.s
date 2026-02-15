@@ -6,15 +6,15 @@
 #   %rdi = pointer to old task's saved SP
 #   %rsi = new task's saved SP
 #
-# Register layout on stack
-#   [return address]        <- pushed by `call`
-#   [rflags]
+# Register layout after save (top of stack at saved SP)
+#   [rflags]                <- saved SP points here
 #   [r15]
 #   [r14]
 #   [r13]
 #   [r12]
 #   [rbx]
-#   [rbp]                   <- saved SP points here
+#   [rbp]
+#   [return address]        <- pushed by caller of context_switch_asm
 # ==============================================================================
 
 .text
@@ -61,4 +61,3 @@ load_context_asm:
     popq %rbx
     popq %rbp
     ret
-
