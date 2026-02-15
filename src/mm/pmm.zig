@@ -76,17 +76,16 @@ pub const FrameAllocator = struct {
     lock: SpinLock = .{},
     pcpu: [MAX_CPUS]PcpuCache = [_]PcpuCache{.{}} ** MAX_CPUS,
 
-    pub fn init(bi: *const BootInfo) FrameAllocator {
+    pub fn init(self: *FrameAllocator, bi: *const BootInfo) void {
         const regions = memoryMapSlice(bi);
-
         const max_phys = maxPhysEnd(regions);
         const frame_count: usize = @intCast((max_phys + PAGE_SIZE - 1) / PAGE_SIZE);
         const bitmap_bytes: usize = (frame_count + 7) / 8;
 
         const bi_virt = @intFromPtr(bi);
         const bi_phys = bi_virt - bi.hhdm_base;
-
         const memmap_bytes = bi.memory_map_entries * @sizeOf(MemoryRegion);
+
         // Build a reserve list
         var reserve_fixed = [_]PhysRange{
             // Reserve first 1MB for BIOS/UEFI data area
@@ -115,7 +114,7 @@ pub const FrameAllocator = struct {
 
         memsetVolatile(bitmap, 0xff);
 
-        var fa = FrameAllocator{
+        self.* = .{
             .hhdm_base = bi.hhdm_base,
             .bitmap_phys = bitmap_phys,
             .bitmap = bitmap,
@@ -125,16 +124,14 @@ pub const FrameAllocator = struct {
 
         for (regions) |r| {
             if (r.kind != .usable and r.kind != .bootloader_reclaimable) continue;
-            fa.markRangeFree(r.base, r.length);
+            self.markRangeFree(r.base, r.length);
         }
 
-        fa.markRangeUsed(bitmap_phys, bitmap_bytes);
+        self.markRangeUsed(bitmap_phys, bitmap_bytes);
 
         for (reserve_fixed) |rr| {
-            fa.markRangeUsed(rr.base, rr.len);
+            self.markRangeUsed(rr.base, rr.len);
         }
-
-        return fa;
     }
 
     pub fn allocFrame(self: *FrameAllocator) ?u64 {

@@ -451,6 +451,9 @@ fn userTaskEntry(_: usize) callconv(.c) noreturn {
     sched_arch.enterInitialUserMode(task.kernelStackTop(), task.user_entry, task.user_stack_top);
 }
 
+extern const __boot_stack_bottom: u8;
+extern const __boot_stack_top: u8;
+
 pub fn startOnBsp() !void {
     const cpu_id = sched_arch.getCpuId();
     const cs = &cpu_scheds[cpu_id];
@@ -462,6 +465,8 @@ pub fn startOnBsp() !void {
         .priority = Priority.NORMAL_DEFAULT,
         .cpu_id = cpu_id,
         .time_slice = task_mod.timeSliceForPriority(Priority.NORMAL_DEFAULT),
+        .stack_base = @intFromPtr(&__boot_stack_bottom),
+        .stack_size = @intFromPtr(&__boot_stack_top) - @intFromPtr(&__boot_stack_bottom),
     };
 
     boot_task.setName("boot");

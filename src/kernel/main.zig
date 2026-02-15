@@ -36,7 +36,22 @@ pub export fn kernel_ap_scheduler_start() callconv(.c) void {
     sched.startOnAp();
 }
 
-export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
+pub extern const __boot_stack_top: u8;
+
+pub export fn _start() callconv(.naked) noreturn {
+    asm volatile (
+        \\lea __boot_stack_top(%%rip), %%rsp
+        \\
+        \\// Ensure 16-byte alignment before calling into SysV code.
+        \\andq $-16, %%rsp
+        \\
+        \\//RDI = boot_info, untouched
+        \\call kernel_main
+        \\ud2
+    );
+}
+
+pub export fn kernel_main(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
     log.setWriter(arch.serial.write);
     log.setTscFn(arch.rdtsc);
     // Initialize serial for debug output
@@ -65,19 +80,24 @@ export fn _start(boot_info: *shared.boot.BootInfo) callconv(.c) noreturn {
     fb.draw_string(140, y + 16, "GREEN", 0x00, 0x00, 0x00);
     fb.fill_rect(256, y, 100, 40, 0x00, 0x00, 0xFF);
     fb.draw_string(260, y + 16, "BLUE", 0xFF, 0xFF, 0xFF);
+    log.info("Framebuffer initialization succeeded", .{});
 
-    pmm_global = mm.pmm.FrameAllocator.init(boot_info);
+    pmm_global.init(boot_info);
+    log.info("Frame allocator initialized", .{});
     vmm_mapper_global = arch.vmm.X64Mapper.init(&pmm_global, boot_info.hhdm_base);
+    log.info("Virtual memory mapper intialized", .{});
 
     const heap_base: u64 = 0xffff_c000_0000_0000;
     const heap_size: u64 = 1024 * 1024 * 1024;
-    kheap_global = mm.heap.KHeap.init(
+    kheap_global.init(
         vmm_mapper_global.mapper(),
         heap_base,
         heap_size,
     );
+    log.info("Kernel heap initialized", .{});
 
     mm.address_space.init(vmm_mapper_global.mapper());
+    log.info("Address space initialized", .{});
 
     mm.debug.heap_stress_test(&kheap_global);
 

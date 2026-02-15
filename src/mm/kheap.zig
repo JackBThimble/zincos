@@ -378,11 +378,11 @@ pub const KHeap = struct {
     // ========================================
     // Public API
     // ========================================
-    pub fn init(mapper: vmm.Mapper, heap_base: u64, heap_size: u64) KHeap {
+    pub fn init(self: *KHeap, mapper: vmm.Mapper, heap_base: u64, heap_size: u64) void {
         std.debug.assert((heap_size & (pmm.PAGE_SIZE - 1)) == 0);
         std.debug.assert((heap_base & (pmm.PAGE_SIZE - 1)) == 0);
 
-        var self = KHeap{
+        self.* = .{
             .mapper = mapper,
             .base = heap_base,
             .size = heap_size,
@@ -412,8 +412,6 @@ pub const KHeap = struct {
 
         self.wilderness = w;
         self.insertFree(w);
-
-        return self;
     }
 
     pub fn kmalloc(self: *KHeap, size: usize, alignment: usize) ?[*]u8 {

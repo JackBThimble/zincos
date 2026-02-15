@@ -147,12 +147,11 @@ SECTIONS
         
         /* Reserve space for initial kernel stack if not allocated elsewhere
          * Uncomment and adjust size as needed:
-         *
-         * . = ALIGN(16);
-         * __stack_bottom = .;
-         * . += 64K;
-         * __stack_top = .;
          */
+         . = ALIGN(16);
+         __boot_stack_bottom = .;
+         . += 64K;
+         __boot_stack_top = .;
         
         __bss_end = .;
     } :data
@@ -212,5 +211,4 @@ ASSERT(__text_start % 4K == 0, ".text not page-aligned")
 ASSERT(__rodata_start % 4K == 0, ".rodata not page-aligned")
 ASSERT(__data_start % 4K == 0, ".data not page-aligned")
 ASSERT(__bss_start % 4K == 0, ".bss not page-aligned")
-
 
