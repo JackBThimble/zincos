@@ -24,7 +24,6 @@ pub fn setupBsp(cpu_mgr: *manager.CpuManager) !void {
 }
 
 pub fn bootAps(
-    lapic: *apic.LocalApic,
     cpu_mgr: *manager.CpuManager,
     allocator: std.mem.Allocator,
 ) !void {
@@ -38,12 +37,11 @@ pub fn bootAps(
         const cpu = cpu_mgr.getCpu(@intCast(i)) orelse continue;
         if (cpu.is_bsp == 1) continue;
 
-        try bootOne(lapic, cpu_mgr, allocator, cpu, pml4);
+        try bootOne(cpu_mgr, allocator, cpu, pml4);
     }
 }
 
 fn bootOne(
-    lapic: *apic.LocalApic,
     cpu_mgr: *manager.CpuManager,
     allocator: std.mem.Allocator,
     cpu: *percpu.PerCpu,
@@ -54,6 +52,7 @@ fn bootOne(
     cpu.tss.rsp0 = cpu.kernel_stack;
     cpu.gdt.setTss(&cpu.tss);
 
+    const lapic = apic.local();
     const mb = trampoline.mailbox();
     mb.pml4 = pml4;
     mb.stack = cpu.kernel_stack;

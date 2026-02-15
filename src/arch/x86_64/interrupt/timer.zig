@@ -49,7 +49,7 @@ pub fn usingTscDeadline() bool {
     return backend == .tsc_deadline;
 }
 
-pub fn calibrate(lapic: *const apic.LocalApic) void {
+pub fn calibrate() void {
     log.info("Calibrating APIC timer...", .{});
 
     const caps = detectTscCaps();
@@ -64,7 +64,7 @@ pub fn calibrate(lapic: *const apic.LocalApic) void {
     serial.outb(PIT_CH2_DATA, @truncate(pit_count));
     serial.outb(PIT_CH2_DATA, @truncate(pit_count >> 8));
 
-    lapic.timerStartMaskedOneShot(0xffff_ffff, .divide_1);
+    apic.local().timerStartMaskedOneShot(0xffff_ffff, .divide_1);
     const tsc_start = readTscOrdered();
 
     gate = serial.inb(PIT_CH2_GATE);
@@ -78,8 +78,8 @@ pub fn calibrate(lapic: *const apic.LocalApic) void {
     }
     const tsc_end = readTscOrdered();
 
-    const remaining = lapic.read(.timer_current_count);
-    lapic.timerStop();
+    const remaining = apic.local().read(.timer_current_count);
+    apic.local().timerStop();
 
     const elapsed = 0xffff_ffff - remaining;
     ticks_per_ms = @intCast(elapsed / calibration_ms);
@@ -110,11 +110,6 @@ pub fn calibrate(lapic: *const apic.LocalApic) void {
     } else {
         log.warn("Timer backend: APIC one-shot (could not determine TSC frequency)", .{});
     }
-}
-
-fn currentLapic() apic.LocalApic {
-    const base = apic.getApicBase() & ~@as(u64, 0xfff);
-    return apic.LocalApic.init(base);
 }
 
 fn cpuid(leaf_id: u32, subid: u32) CpuidLeaf {
@@ -230,7 +225,7 @@ fn armLapicOneShotNs(delay_ns: u64) void {
         return;
     }
 
-    var lapic = currentLapic();
+    var lapic = apic.local();
     lapic.timerStartOneShot(
         nsToTicks(delay_ns),
         .divide_1,
@@ -251,7 +246,7 @@ fn armTscDeadlineNs(delay_ns: u64) void {
     else
         now + delta;
 
-    var lapic = currentLapic();
+    var lapic = apic.local();
     lapic.write(.timer_lvt, (@as(u32, 0x2) << 17) | @as(u32, idt.TIMER_VECTOR));
     writeMsr(IA32_TSC_DEADLINE, deadline);
 }
@@ -273,13 +268,13 @@ pub fn armOneShotMs(delay_ms: u64) void {
 
 pub fn disarm() void {
     if (backend == .tsc_deadline) {
-        var lapic_tsc = currentLapic();
+        var lapic_tsc = apic.local();
         writeMsr(IA32_TSC_DEADLINE, 0);
         lapic_tsc.write(.timer_lvt, (1 << 16) | (@as(u32, 0x2) << 17) | @as(u32, idt.TIMER_VECTOR));
         return;
     }
 
-    var lapic = currentLapic();
+    var lapic = apic.local();
     lapic.timerStop();
     lapic.write(.timer_lvt, (1 << 16) | @as(u32, idt.TIMER_VECTOR));
 }

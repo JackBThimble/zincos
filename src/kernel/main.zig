@@ -82,6 +82,8 @@ pub export fn kernel_main(boot_info: *shared.boot.BootInfo) callconv(.c) noretur
     fb.draw_string(260, y + 16, "BLUE", 0xFF, 0xFF, 0xFF);
     log.info("Framebuffer initialization succeeded", .{});
 
+    arch.initHhdm(boot_info.hhdm_base);
+
     pmm_global.init(boot_info);
     log.info("Frame allocator initialized", .{});
     vmm_mapper_global = arch.vmm.X64Mapper.init(&pmm_global, boot_info.hhdm_base);
@@ -133,7 +135,7 @@ pub export fn kernel_main(boot_info: *shared.boot.BootInfo) callconv(.c) noretur
         log.err("User process error: {any}", .{err});
     };
 
-    arch.timer.calibrate(&smp_service.lapic);
+    arch.timer.calibrate();
     smp_service.bootAps(allocator) catch |err| {
         log.err("AP boot failed: {any}", .{err});
     };

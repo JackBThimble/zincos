@@ -1,4 +1,17 @@
 const std = @import("std");
+const arch = @import("../mod.zig");
+const shared = @import("shared");
+
+var local_apic: ?LocalApic = null;
+
+pub fn initLocal() void {
+    const phys = getApicBase() & ~@as(u64, 0xfff);
+    local_apic = LocalApic.init(phys);
+}
+
+pub inline fn local() *const LocalApic {
+    return &(local_apic orelse @panic("LAPIC not initialized"));
+}
 
 pub const LocalApic = struct {
     base_address: u64,
@@ -30,8 +43,8 @@ pub const LocalApic = struct {
         timer_divide_config = 0x3e0,
     };
 
-    pub fn init(base_addr: u64) LocalApic {
-        return .{ .base_address = base_addr };
+    pub fn init(phys_base: u64) LocalApic {
+        return .{ .base_address = arch.physToVirt(phys_base) };
     }
 
     pub fn read(self: *const LocalApic, reg: Register) u32 {

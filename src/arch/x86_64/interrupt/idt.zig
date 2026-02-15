@@ -204,6 +204,5 @@ fn handleResched() void {
 }
 
 fn sendEoi() void {
-    var lapic = apic.LocalApic.init(apic.getApicBase() & ~@as(u64, 0xfff));
-    lapic.sendEoi();
+    apic.local().sendEoi();
 }

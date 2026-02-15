@@ -13,6 +13,20 @@ comptime {
     _ = idt.sched_check_preempt;
 }
 
+var hhdm_base: u64 = 0;
+
+pub fn initHhdm(base: u64) void {
+    hhdm_base = base;
+}
+
+pub inline fn physToVirt(phys: u64) u64 {
+    return hhdm_base + phys;
+}
+
+pub inline fn virtToPhys(virt: u64) u64 {
+    return virt - hhdm_base;
+}
+
 pub fn hcf() noreturn {
     while (true) {
         asm volatile ("hlt");
