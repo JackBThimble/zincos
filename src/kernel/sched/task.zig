@@ -143,6 +143,12 @@ pub const Task = struct {
     /// Set during process creation for initial transition to user mode.
     user_stack_top: u64 = 0,
 
+    /// Generic user startup arguments.
+    /// The arch layer places these in the initial user calling convention.
+    user_arg0: u64 = 0,
+    user_arg1: u64 = 0,
+    user_arg2: u64 = 0,
+
     pub fn setName(self: *Task, src: []const u8) void {
         const len = @min(src.len, self.name.len - 1);
         @memcpy(self.name[0..len], src[0..len]);

@@ -24,6 +24,7 @@ pub const BOOT_MAGIC = boot_info.BOOT_MAGIC;
 
 const L = std.unicode.utf8ToUtf16LeStringLiteral;
 const KERNEL_PATH = L("\\efi\\ZincOS");
+const INITRD_PATH = L("\\efi\\initrd.img");
 
 var boot_services: *BootServices = undefined;
 var kernel_boot_info: boot_info.BootInfo = .{
@@ -34,6 +35,8 @@ var kernel_boot_info: boot_info.BootInfo = .{
     .kernel_physical_base = 0,
     .kernel_virtual_base = 0,
     .kernel_size = 0,
+    .initrd_addr = 0,
+    .initrd_size = 0,
     .rsdp_address = 0,
     .hhdm_base = 0,
     .cpu_count = 0,
@@ -65,6 +68,17 @@ pub fn main() noreturn {
         halt();
     };
 
+    const initrd_data = filesystem.load_file(boot_services, root, INITRD_PATH) catch null;
+
+    if (initrd_data == null) {
+        console.println("[!] No initrd found at \\efi\\initrd.img (continuing without it)");
+    }
+
+    if (initrd_data) |rd| {
+        kernel_boot_info.initrd_addr = @intFromPtr(rd.ptr);
+        kernel_boot_info.initrd_size = rd.len;
+        console.printfln("[+] Initrd loaded: {d} bytes @ 0x{x}", .{ rd.len, kernel_boot_info.initrd_addr });
+    }
     const kernel_data = filesystem.load_file(boot_services, root, KERNEL_PATH) catch {
         console.println("[!] FATAL: Cannot load kernel");
         console.println("[!] Expected at: \\efi\\ZincOS");

@@ -250,6 +250,7 @@ pub const Endpoint = struct {
     pub fn call(self: *Endpoint, msg: *const Message, msg_reply: *Message) error{EndpointClosed}!void {
         const task = sched.currentTask() orelse unreachable;
         const flags = sched_arch.disableIrq();
+        _ = msg_reply;
 
         self.lock.acquire();
 
@@ -261,7 +262,7 @@ pub const Endpoint = struct {
 
         // Set up the call state BEFORE anything else
         task.ipc.msg = msg.*;
-        task.ipc.reply_buf = msg_reply;
+        task.ipc.reply_buf = null;
         task.ipc.waiting_for_reply = true;
 
         // Hot path: receiver already waiting
@@ -300,9 +301,7 @@ pub const Endpoint = struct {
     // reply - non-blocking, sends reply to a caller from call()
     // =========================================================================
     pub fn reply(caller: *Task, msg: *const Message) void {
-        if (caller.ipc.reply_buf) |buf| {
-            buf.* = msg.*;
-        }
+        caller.ipc.msg = msg.*;
 
         caller.ipc.waiting_for_reply = false;
         caller.ipc.reply_buf = null;

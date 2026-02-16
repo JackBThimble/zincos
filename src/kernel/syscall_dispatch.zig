@@ -6,10 +6,11 @@ const ipc = @import("ipc/mod.zig");
 const process = @import("process/mod.zig");
 const sched = @import("sched/core.zig");
 const shm = @import("shm.zig");
+const initrd_boot = @import("initrd_boot.zig");
 const IpcHandle = ipc.handles.Handle;
 
 const sc = shared.syscall;
-const SyscallFrame = arch.syscall.SyscallFrame;
+const SyscallContext = arch.syscall.SyscallContext;
 
 const SERIAL_STDIN_FD: u64 = 0;
 const SERIAL_STDOUT_FD: u64 = 1;
@@ -63,7 +64,7 @@ fn mapShmError(err: anyerror) sc.Errno {
         error.OutOfMemory => .NOMEM,
         error.InvalidSegment, error.InvalidSize, error.UnalignedAddress, error.NotMapped, error.MappingCorrupted => .INVAL,
         error.PermissionDenied => .BADF,
-        error.OutOfIds, error.OutOfHandles, error.Busy, error.AlreadMapped => .AGAIN,
+        error.OutOfIds, error.OutOfHandles, error.Busy, error.AlreadyMapped => .AGAIN,
         else => .INVAL,
     };
 }
@@ -75,8 +76,12 @@ fn badFd(fd: u64, for_read: bool) bool {
 
 /// Kernel-side syscall implementation.
 /// Called indirectly from arch.syscall.syscall_dispatch.
-pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
-    switch (frame.rax) {
+pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
+    const arg0 = arch.syscall.arg(ctx, 0);
+    const arg1 = arch.syscall.arg(ctx, 1);
+    const arg2 = arch.syscall.arg(ctx, 2);
+
+    switch (arch.syscall.number(ctx)) {
         @intFromEnum(sc.Number.nop) => return 0,
         @intFromEnum(sc.Number.get_cpu_id) => return @as(u64, arch.percpu.getCpuId()),
         @intFromEnum(sc.Number.sched_yield) => {
@@ -85,9 +90,9 @@ pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
         },
         @intFromEnum(sc.Number.get_pid) => return @as(u64, process.currentPid()),
         @intFromEnum(sc.Number.sys_read) => {
-            const fd = frame.rdi;
-            const buf_ptr = frame.rsi;
-            const len: usize = std.math.cast(usize, frame.rdx) orelse return retErr(.INVAL);
+            const fd = arg0;
+            const buf_ptr = arg1;
+            const len: usize = std.math.cast(usize, arg2) orelse return retErr(.INVAL);
 
             if (badFd(fd, true)) return retErr(.BADF);
             if (buf_ptr == 0) return retErr(.FAULT);
@@ -100,9 +105,9 @@ pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
             return 0;
         },
         @intFromEnum(sc.Number.sys_write) => {
-            const fd = frame.rdi;
-            const buf_ptr = frame.rsi;
-            const len: usize = std.math.cast(usize, frame.rdx) orelse return retErr(.INVAL);
+            const fd = arg0;
+            const buf_ptr = arg1;
+            const len: usize = std.math.cast(usize, arg2) orelse return retErr(.INVAL);
             if (badFd(fd, false)) return retErr(.BADF);
             if (buf_ptr == 0 and len != 0) return retErr(.FAULT);
 
@@ -122,8 +127,8 @@ pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
             return @as(u64, handle);
         },
         @intFromEnum(sc.Number.ipc_send) => {
-            const endpoint_handle = parseHandle(frame.rdi) orelse return retErr(.INVAL);
-            const msg = parseMsgPtrConst(frame.rsi) orelse return retErr(.FAULT);
+            const endpoint_handle = parseHandle(arg0) orelse return retErr(.INVAL);
+            const msg = parseMsgPtrConst(arg1) orelse return retErr(.FAULT);
             const pid = process.currentPid();
             const ep_id = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.send) orelse return retErr(.BADF);
 
@@ -131,16 +136,16 @@ pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
             return 0;
         },
         @intFromEnum(sc.Number.ipc_receive) => {
-            const endpoint_handle = parseHandle(frame.rdi) orelse return retErr(.INVAL);
-            const out_msg = parseMsgPtr(frame.rsi) orelse return retErr(.FAULT);
+            const endpoint_handle = parseHandle(arg0) orelse return retErr(.INVAL);
+            const out_msg = parseMsgPtr(arg1) orelse return retErr(.FAULT);
             const pid = process.currentPid();
             const ep_id = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.receive) orelse return retErr(.BADF);
 
             const res = ipc.receive(ep_id) catch |err| return retErr(mapEndpointError(err));
             out_msg.* = res.msg;
 
-            if (frame.rdx != 0) {
-                const out_caller: *u64 = @ptrFromInt(frame.rdx);
+            if (arg2 != 0) {
+                const out_caller: *u64 = @ptrFromInt(arg2);
                 if (res.caller) |caller| {
                     const caller_handle = ipc.handles.installCaller(pid, caller) catch |err| return switch (err) {
                         error.OutOfMemory => retErr(.NOMEM),
@@ -156,19 +161,22 @@ pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
             return 0;
         },
         @intFromEnum(sc.Number.ipc_call) => {
-            const endpoint_handle = parseHandle(frame.rdi) orelse return retErr(.INVAL);
-            const req = parseMsgPtrConst(frame.rsi) orelse return retErr(.FAULT);
-            const reply = parseMsgPtr(frame.rdx) orelse return retErr(.FAULT);
+            const endpoint_handle = parseHandle(arg0) orelse return retErr(.INVAL);
+            const req = parseMsgPtrConst(arg1) orelse return retErr(.FAULT);
+            const reply = parseMsgPtr(arg2) orelse return retErr(.FAULT);
             const pid = process.currentPid();
             const ep_id = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.call) orelse return retErr(.BADF);
 
             ipc.call(ep_id, req, reply) catch |err|
                 return retErr(mapEndpointError(err));
+
+            const task = sched.currentTask() orelse return retErr(.INVAL);
+            reply.* = task.ipc.msg;
             return 0;
         },
         @intFromEnum(sc.Number.ipc_reply) => {
-            const caller_handle = parseHandle(frame.rdi) orelse return retErr(.INVAL);
-            const reply = parseMsgPtrConst(frame.rsi) orelse return retErr(.FAULT);
+            const caller_handle = parseHandle(arg0) orelse return retErr(.INVAL);
+            const reply = parseMsgPtrConst(arg1) orelse return retErr(.FAULT);
             const pid = process.currentPid();
             const caller = ipc.handles.consumeCaller(pid, caller_handle) orelse return retErr(.BADF);
 
@@ -176,7 +184,7 @@ pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
             return 0;
         },
         @intFromEnum(sc.Number.ipc_notify) => {
-            const endpoint_handle = parseHandle(frame.rdi) orelse return retErr(.INVAL);
+            const endpoint_handle = parseHandle(arg0) orelse return retErr(.INVAL);
             const pid = process.currentPid();
             const ep_id = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.send) orelse return retErr(.BADF);
 
@@ -184,22 +192,22 @@ pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
             return 0;
         },
         @intFromEnum(sc.Number.shm_create) => {
-            const size_bytes: usize = std.math.cast(usize, frame.rdi) orelse return retErr(.INVAL);
+            const size_bytes: usize = std.math.cast(usize, arg0) orelse return retErr(.INVAL);
             const pid = process.currentPid();
             const id = shm.create(pid, size_bytes) catch |err| return retErr(mapShmError(err));
             return @as(u64, id);
         },
         @intFromEnum(sc.Number.shm_grant) => {
-            const id = parseShmId(frame.rdi) orelse return retErr(.INVAL);
-            const target_pid: process.ProcessId = std.math.cast(process.ProcessId, frame.rsi) orelse return retErr(.INVAL);
+            const id = parseShmId(arg0) orelse return retErr(.INVAL);
+            const target_pid: process.ProcessId = std.math.cast(process.ProcessId, arg1) orelse return retErr(.INVAL);
 
             const pid = process.currentPid();
             shm.grant(id, pid, target_pid) catch |err| return retErr(mapShmError(err));
             return 0;
         },
         @intFromEnum(sc.Number.shm_map) => {
-            const id = parseShmId(frame.rdi) orelse return retErr(.INVAL);
-            const virt = frame.rsi;
+            const id = parseShmId(arg0) orelse return retErr(.INVAL);
+            const virt = arg1;
             const pid = process.currentPid();
             const task = sched.currentTask() orelse return retErr(.INVAL);
             const as = task.addr_space orelse return retErr(.INVAL);
@@ -207,8 +215,8 @@ pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
             return 0;
         },
         @intFromEnum(sc.Number.shm_unmap) => {
-            const id = parseShmId(frame.rdi) orelse return retErr(.INVAL);
-            const virt = frame.rsi;
+            const id = parseShmId(arg0) orelse return retErr(.INVAL);
+            const virt = arg1;
             const pid = process.currentPid();
             const task = sched.currentTask() orelse return retErr(.INVAL);
             const as = task.addr_space orelse return retErr(.INVAL);
@@ -216,10 +224,24 @@ pub export fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
             return 0;
         },
         @intFromEnum(sc.Number.shm_destroy) => {
-            const id = parseShmId(frame.rdi) orelse return retErr(.INVAL);
+            const id = parseShmId(arg0) orelse return retErr(.INVAL);
             const pid = process.currentPid();
             shm.destroy(id, pid) catch |err| return retErr(mapShmError(err));
             return 0;
+        },
+        @intFromEnum(sc.Number.vfs_get_bootstrap_endpoint) => {
+            const pid = process.currentPid();
+            if (pid == 0) return retErr(.NODEV);
+
+            const endpoint = initrd_boot.getBootstrapVfsEndpoint() orelse return retErr(.NODEV);
+            const rights = ipc.handles.Rights.call;
+            const handle = ipc.handles.installEndpointInto(pid, endpoint, rights) catch |err| return switch (err) {
+                error.NotInitialized => retErr(.NODEV),
+                error.InvalidEndpoint => retErr(.NODEV),
+                error.OutOfMemory => retErr(.NOMEM),
+                error.OutOfHandles => retErr(.AGAIN),
+            };
+            return @as(u64, handle);
         },
         else => return retErr(.NOSYS),
     }

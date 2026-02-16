@@ -24,6 +24,9 @@ pub const Number = enum(u64) {
     shm_map = 24,
     shm_unmap = 25,
     shm_destroy = 26,
+
+    // Early-boot service discovery shim.
+    vfs_get_bootstrap_endpoint = 27,
 };
 
 pub const Errno = enum(i64) {

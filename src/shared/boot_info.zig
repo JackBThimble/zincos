@@ -48,6 +48,8 @@ pub const BootInfo = extern struct {
     kernel_physical_base: u64,
     kernel_virtual_base: u64,
     kernel_size: u64,
+    initrd_addr: u64,
+    initrd_size: u64,
     rsdp_address: u64,
     hhdm_base: u64,
     cpu_count: u64,

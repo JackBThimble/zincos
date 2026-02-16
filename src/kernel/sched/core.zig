@@ -30,6 +30,12 @@ pub const CpuSched = struct {
     tick_count: u64 = 0,
 };
 
+pub const UserStartArgs = struct {
+    arg0: u64 = 0,
+    arg1: u64 = 0,
+    arg2: u64 = 0,
+};
+
 fn armCpuTimer(cs: *const CpuSched, task: *const Task) void {
     if (task == cs.idle_task and cs.queue.isEmpty()) {
         arch.timer.disarm();
@@ -119,11 +125,15 @@ pub fn createUserTask(
     user_entry: u64,
     user_stack_top: u64,
     prio: u5,
+    start_args: UserStartArgs,
 ) !*Task {
     const t = try createTask(userTaskEntry, 0, prio);
     t.addr_space = addr_space_ptr;
     t.user_entry = user_entry;
     t.user_stack_top = user_stack_top;
+    t.user_arg0 = start_args.arg0;
+    t.user_arg1 = start_args.arg1;
+    t.user_arg2 = start_args.arg2;
     return t;
 }
 
@@ -157,8 +167,9 @@ pub fn spawnUser(
     user_stack_top: u64,
     prio: u5,
     name: []const u8,
+    start_args: UserStartArgs,
 ) !*Task {
-    const t = try createUserTask(addr_space_ptr, user_entry, user_stack_top, prio);
+    const t = try createUserTask(addr_space_ptr, user_entry, user_stack_top, prio, start_args);
     t.setName(name);
 
     const target_cpu = leastLoadedCpu();
@@ -450,7 +461,14 @@ fn userTaskEntry(_: usize) callconv(.c) noreturn {
 
     // Arch layer handles CPU config and mode transition
     // Never returns
-    sched_arch.enterInitialUserMode(task.kernelStackTop(), task.user_entry, task.user_stack_top);
+    sched_arch.enterInitialUserMode(
+        task.kernelStackTop(),
+        task.user_entry,
+        task.user_stack_top,
+        task.user_arg0,
+        task.user_arg1,
+        task.user_arg2,
+    );
 }
 
 extern const __boot_stack_bottom: u8;

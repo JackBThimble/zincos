@@ -20,6 +20,7 @@ const ipc = @import("ipc/mod.zig");
 const process = @import("process/mod.zig");
 const shm = @import("shm.zig");
 const syscall_dispatch = @import("syscall_dispatch.zig");
+const initrd_boot = @import("initrd_boot.zig");
 
 pub const std_options: std.Options = .{
     .page_size_min = 4096,
@@ -89,7 +90,7 @@ pub export fn kernel_main(boot_info: *shared.boot.BootInfo) callconv(.c) noretur
     pmm_global.init(boot_info);
     log.info("Frame allocator initialized", .{});
     vmm_mapper_global = arch.vmm.X64Mapper.init(&pmm_global, boot_info.hhdm_base);
-    log.info("Virtual memory mapper intialized", .{});
+    log.info("Virtual memory mapper initialized", .{});
 
     const heap_base: u64 = 0xffff_c000_0000_0000;
     const heap_size: u64 = 1024 * 1024 * 1024;
@@ -135,9 +136,28 @@ pub export fn kernel_main(boot_info: *shared.boot.BootInfo) callconv(.c) noretur
     );
     arch.idt.init();
 
-    // Spawn test userspace only after IDT is live so faults are diagnosable.
-    @import("user.zig").spawnDemoUserProcess(allocator) catch |err| {
-        log.err("User process error: {any}", .{err});
+    if (boot_info.initrd_addr == 0 or boot_info.initrd_size == 0) {
+        log.err("initrd missing from boot info", .{});
+        @panic("initrd missing");
+    }
+
+    const initrd_size: usize = std.math.cast(usize, boot_info.initrd_size) orelse {
+        log.err("initrd size too large for this build: {d}", .{boot_info.initrd_size});
+        @panic("initrd size invalid");
+    };
+    const initrd_addr = if (boot_info.initrd_addr >= boot_info.hhdm_base)
+        boot_info.initrd_addr
+    else
+        arch.physToVirt(boot_info.initrd_addr);
+
+    initrd_boot.setInitrd(@ptrFromInt(initrd_addr), initrd_size);
+    _ = initrd_boot.bootstrap(allocator) catch |err| {
+        log.err("initrd bootstrap failed: {any}", .{err});
+        @panic("initrd bootstrap failed");
+    };
+    _ = initrd_boot.bootstrapTestClient(allocator) catch |err| {
+        log.err("initrd client bootstrap failed: {any}", .{err});
+        @panic("initrd client bootstrap failed");
     };
 
     arch.timer.calibrate();

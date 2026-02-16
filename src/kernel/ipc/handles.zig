@@ -196,6 +196,19 @@ pub fn installEndpoint(pid: process.ProcessId, endpoint: EndpointId) !Handle {
     return handles.install(global_allocator.?, .{ .endpoint = endpoint }, Rights.send | Rights.receive | Rights.call);
 }
 
+/// Kernel-only helper for granting an endpoint capability into another process.
+/// This intentionally skips the owner_pid check and should only be used by
+/// trusted kernel bootstrap code.
+pub fn installEndpointInto(pid: process.ProcessId, endpoint: EndpointId, rights: u4) !Handle {
+    lock.acquire();
+    defer lock.release();
+
+    _ = registry.ownerOf(endpoint) orelse return error.InvalidEndpoint;
+
+    var handles = try getOrCreate(pid);
+    return handles.install(global_allocator.?, .{ .endpoint = endpoint }, rights);
+}
+
 pub fn resolveEndpoint(pid: process.ProcessId, handle: Handle, required_rights: u4) ?EndpointId {
     lock.acquire();
     defer lock.release();

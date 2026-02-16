@@ -20,6 +20,7 @@ const Task = @import("../sched/task.zig").Task;
 const elf_loader = @import("../elf/loader.zig");
 
 pub const ProcessId = u32;
+pub const UserStartArgs = sched.UserStartArgs;
 
 pub const ProcessState = enum(u8) {
     starting,
@@ -100,6 +101,16 @@ pub fn createFromElf(
     elf_image: []const u8,
     priority: u5,
 ) !*Process {
+    return createFromElfWithArgs(allocator, name, elf_image, priority, .{});
+}
+
+pub fn createFromElfWithArgs(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    elf_image: []const u8,
+    priority: u5,
+    start_args: UserStartArgs,
+) !*Process {
     const as = try mm.address_space.AddressSpace.create(allocator);
     errdefer as.destroy(allocator);
 
@@ -108,7 +119,7 @@ pub fn createFromElf(
     const stack_base = USER_STACK_TOP - USER_STACK_PAGES * mm.PAGE_SIZE;
     try as.mapAnonymous(stack_base, USER_STACK_PAGES, mm.vmm.MapFlags.user_stack);
 
-    const task = try sched.spawnUser(as, loaded.entry, USER_STACK_TOP, priority, name);
+    const task = try sched.spawnUser(as, loaded.entry, USER_STACK_TOP, priority, name, start_args);
 
     const proc = try allocator.create(Process);
     proc.* = .{

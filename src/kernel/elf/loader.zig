@@ -40,7 +40,9 @@ pub fn loadIntoAddressSpace(as: *mm.address_space.AddressSpace, image: []const u
         const page_count: usize = std.math.cast(usize, page_count_u64) orelse return error.OutOfMemory;
 
         var flags = mm.vmm.MapFlags{ .user = true };
-        flags.writable = ph.flags.W;
+        // Map writable while loading so the kernel can copy segment bytes.
+        // TODO: tighten permissions after load once remap/protect exists.
+        flags.writable = true;
         flags.executable = ph.flags.X;
 
         try as.mapAnonymous(seg_start, page_count, flags);

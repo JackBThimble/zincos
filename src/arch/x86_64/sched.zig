@@ -2,7 +2,7 @@ const percpu = @import("cpu/percpu.zig");
 
 extern fn context_switch_asm(old_sp_ptr: *u64, new_sp: u64) callconv(.c) void;
 extern fn load_context_asm(new_sp: u64) callconv(.c) noreturn;
-extern fn enter_user_mode(user_rip: u64, user_rsp: u64) callconv(.c) noreturn;
+extern fn enter_user_mode(user_rip: u64, user_rsp: u64, arg0: u64, arg1: u64, arg2: u64) callconv(.c) noreturn;
 
 /// Opaque interrupt state. rflags for x64
 pub const IrqFlags = u64;
@@ -126,6 +126,9 @@ pub fn enterInitialUserMode(
     kernel_stack_top: u64,
     user_entry_addr: u64,
     user_stack: u64,
+    arg0: u64,
+    arg1: u64,
+    arg2: u64,
 ) noreturn {
     // Set up kernel stack for interrupts from user mode
     updateKernelStack(kernel_stack_top);
@@ -136,7 +139,7 @@ pub fn enterInitialUserMode(
     writeMsr(IA32_KERNEL_GS_BASE, 0);
 
     // Build iretq frame and drop to ring 3
-    enter_user_mode(user_entry_addr, user_stack);
+    enter_user_mode(user_entry_addr, user_stack, arg0, arg1, arg2);
 }
 
 /// Read a Model-Specific Register.

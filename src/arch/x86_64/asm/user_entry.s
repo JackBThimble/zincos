@@ -2,9 +2,12 @@
 # x86_64 User Mode Entry Trampoline
 # ==============================================================================
 # 
-# enter_user_mode(user_rip: u64, user_rsp: u64)
+# enter_user_mode(user_rip: u64, user_rsp: u64, arg0: u64, arg1: u64, arg2: u64)
 #   %rdi = user RIP (entry_point)
 #   %rsi = user RSP (top of user stack)
+#   %rdx = startup arg0
+#   %rcx = startup arg1
+#   %r8  = startup arg2
 #
 # Builds an iretq frame and drops to ring 3.
 #
@@ -38,12 +41,29 @@
 .align 16
 
 enter_user_mode:
-    # Zero all general purpose registers to avoid leaking kernel data 
-    # %rdi and %rsi hold arguments, zero everything else first
+    # Preserve entry context and startup arguments.
+    movq %rdi, %rax
+    movq %rsi, %rbx
+    movq %rdx, %r12
+    movq %rcx, %r13
+    movq %r8, %r14
+
+    # Build iretq frame
+    pushq $USER_SS          # SS
+    pushq %rbx              # RSP (user stack)
+    pushq $RFLAGS_IF        # RFLAGS
+    pushq $USER_CS          # CS
+    pushq %rax              # RIP (user entry)
+
+    # Place startup arguments in user ABI registers.
+    movq %r12, %rdi
+    movq %r13, %rsi
+    movq %r14, %rdx
+
+    # Zero remaining registers to avoid leaking kernel state.
     xorq %rax, %rax
     xorq %rbx, %rbx
     xorq %rcx, %rcx
-    xorq %rdx, %rdx
     xorq %rbp, %rbp
     xorq %r8, %r8
     xorq %r9, %r9
@@ -53,17 +73,6 @@ enter_user_mode:
     xorq %r13, %r13
     xorq %r14, %r14
     xorq %r15, %r15
-
-    # Build iretq frame
-    pushq $USER_SS          # SS
-    pushq %rsi              # RSP (user stack)
-    pushq $RFLAGS_IF        # RFLAGS
-    pushq $USER_CS          # CS
-    pushq %rdi              # RIP (user entry)
-
-    # Zero the argument registers now that they've been used
-    xorq %rdi, %rdi
-    xorq %rsi, %rsi
 
     # Swap GS: kernel GS_BASE -> KERNEL_GS_BASE (for next interrupt)
     #          user GS (from KERNEL_GS_BASE) -> GS_BASE

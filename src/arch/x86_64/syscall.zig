@@ -39,10 +39,8 @@ const FMASK_DF: u64 = 1 << 10; // clear DF (direction flag)
 const FMASK_TF: u64 = 1 << 8; // clear TF (trap flag)
 
 extern const syscall_entry_stub: u8;
-extern fn kernel_syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64;
-
-/// Frame pushed by syscall_entry.s, passed to dispatch.
-pub const SyscallFrame = extern struct {
+/// Frame pushed by syscall_entry.s.
+const SyscallFrame = extern struct {
     // Callee-saved (preserved for sysret)
     r15: u64,
     r14: u64,
@@ -63,6 +61,27 @@ pub const SyscallFrame = extern struct {
     r11: u64, // user RFLAGS (saved by SYSCALL hardware)
     user_rsp: u64, // saved from percpu scratch
 };
+
+/// Arch-owned syscall context shape.
+pub const SyscallContext = SyscallFrame;
+
+pub inline fn number(ctx: *const SyscallContext) u64 {
+    return ctx.rax;
+}
+
+pub inline fn arg(ctx: *const SyscallContext, idx: u3) u64 {
+    return switch (idx) {
+        0 => ctx.rdi,
+        1 => ctx.rsi,
+        2 => ctx.rdx,
+        3 => ctx.r10,
+        4 => ctx.r8,
+        5 => ctx.r9,
+        else => 0,
+    };
+}
+
+extern fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64;
 
 fn writeMsr(msr: u32, value: u64) void {
     const low: u32 = @truncate(value);
@@ -119,6 +138,6 @@ pub const PERCPU_SCRATCH0_OFF = @offsetOf(percpu.PerCpu, "scratch0");
 pub const PERCPU_KERNEL_STACK_OFF = @offsetOf(percpu.PerCpu, "kernel_stack");
 
 /// Syscall dispatcher called from syscall_entry.s.
-pub export fn syscall_dispatch(frame: *SyscallFrame) callconv(.c) u64 {
-    return kernel_syscall_dispatch(frame);
+pub export fn syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
+    return kernel_syscall_dispatch(ctx);
 }
