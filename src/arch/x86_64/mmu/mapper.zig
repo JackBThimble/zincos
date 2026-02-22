@@ -173,6 +173,7 @@ pub const X64Mapper = struct {
         .activate = activateImpl,
         .active_root = activeRootImpl,
         .kernel_root = kernelRootImpl,
+        .query_4k = query4kImpl,
         .hhdm_base = hhdmBaseImpl,
     };
 
@@ -308,6 +309,23 @@ pub const X64Mapper = struct {
     fn kernelRootImpl(ptr: *anyopaque) u64 {
         const self: *X64Mapper = @ptrCast(@alignCast(ptr));
         return self.kernel_pml4_phys;
+    }
+
+    fn query4kImpl(ptr: *anyopaque, root: u64, virt: u64) ?vmm.PageInfo {
+        const self: *X64Mapper = @ptrCast(@alignCast(ptr));
+        const page_virt = std.mem.alignBackward(u64, virt, std.options.page_size_min.?);
+        assertCanonical(page_virt);
+
+        const slot = pteSlotIn(self.hhdm_base, root, page_virt) orelse return null;
+        const pte = slot.*;
+        if ((pte & PTE_PRESENT) == 0) return null;
+
+        return .{
+            .phys = ptePhys(pte),
+            .writable = (pte & PTE_WRITABLE) != 0,
+            .user = (pte & PTE_USER) != 0,
+            .executable = (pte & PTE_NX) == 0,
+        };
     }
 
     fn hhdmBaseImpl(ptr: *anyopaque) u64 {

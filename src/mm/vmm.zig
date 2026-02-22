@@ -51,6 +51,13 @@ pub const MapFlags = struct {
     pub const mmio = MapFlags{ .writable = true, .device = true, .cache_disable = true };
 };
 
+pub const PageInfo = struct {
+    phys: u64,
+    writable: bool,
+    user: bool,
+    executable: bool,
+};
+
 /// A dynamic interface (vtable) for arch-specific page manipulation.
 /// mm module calls through this interface without knowing arch details.
 pub const Mapper = struct {
@@ -84,6 +91,8 @@ pub const Mapper = struct {
         active_root: *const fn (ptr: *anyopaque) u64,
         /// Return the kernel address space handle.
         kernel_root: *const fn (ptr: *anyopaque) u64,
+        /// Query page info
+        query_4k: *const fn (ptr: *anyopaque, root: u64, virt: u64) ?PageInfo,
         /// Return the HHDM base for accessing physical memory.
         /// Used by the mm layer for zeroing newly allocated frames.
         hhdm_base: *const fn (ptr: *anyopaque) u64,
@@ -137,6 +146,11 @@ pub const Mapper = struct {
     /// Get the kernel root handle.
     pub inline fn kernelRoot(self: Mapper) u64 {
         return self.vtable.kernel_root(self.ptr);
+    }
+
+    /// Query page info
+    pub inline fn query4k(self: Mapper, root: u64, virt: u64) ?PageInfo {
+        return self.vtable.query_4k(self.ptr, root, virt);
     }
 
     /// Get the HHDM base address.

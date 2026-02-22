@@ -256,6 +256,31 @@ pub const AddressSpace = struct {
         const m = mapper orelse return false;
         return m.activeRoot() == self.handle;
     }
+
+    /// Check if address range is accessible
+    pub fn isUserRangeAccessible(self: *AddressSpace, virt_start: u64, len: usize, write: bool) bool {
+        if (len == 0) return true;
+        if (virt_start > USER_ADDR_MAX) return false;
+
+        const last = std.math.add(u64, virt_start, @as(u64, @intCast(len - 1))) catch return false;
+        if (last > USER_ADDR_MAX) return false;
+
+        const m = mapper orelse return false;
+
+        const first_page = std.mem.alignBackward(u64, virt_start, PAGE_SIZE);
+        const end_exclusive = std.mem.alignForward(u64, last + 1, PAGE_SIZE);
+
+        self.lock.acquire();
+        defer self.lock.release();
+
+        var page = first_page;
+        while (page < end_exclusive) : (page += PAGE_SIZE) {
+            const info = m.query4k(self.handle, page) orelse return false;
+            if (!info.user) return false;
+            if (write and !info.writable) return false;
+        }
+        return true;
+    }
 };
 
 // =========================================================================
