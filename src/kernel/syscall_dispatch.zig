@@ -3,6 +3,8 @@ const arch = @import("arch");
 const shared = @import("shared");
 
 const ipc = @import("ipc/mod.zig");
+const console = @import("console.zig");
+const keyboard = @import("keyboard.zig");
 const process = @import("process/mod.zig");
 const sched = @import("sched/core.zig");
 const shm = @import("shm.zig");
@@ -96,13 +98,11 @@ pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
 
             if (badFd(fd, true)) return retErr(.BADF);
             if (buf_ptr == 0) return retErr(.FAULT);
-
-            const out: [*]u8 = @ptrFromInt(buf_ptr);
             if (len == 0) return 0;
 
-            // TODO: wire real keyboard/console input. For now return EOF.
-            _ = out;
-            return 0;
+            const out: [*]u8 = @ptrFromInt(buf_ptr);
+            const task = sched.currentTask() orelse return retErr(.INVAL);
+            return keyboard.readBlocking(out[0..len], task);
         },
         @intFromEnum(sc.Number.sys_write) => {
             const fd = arg0;
@@ -113,6 +113,7 @@ pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
 
             const bytes: []const u8 = @as([*]const u8, @ptrFromInt(buf_ptr))[0..len];
             arch.serial.write(bytes);
+            console.write(bytes);
             return @as(u64, @intCast(len));
         },
         @intFromEnum(sc.Number.ipc_create_endpoint) => {

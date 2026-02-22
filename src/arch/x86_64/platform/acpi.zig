@@ -86,6 +86,14 @@ pub const Madt = extern struct {
         global_system_interrupt_base: u32,
     };
 
+    pub const InterruptOverride = extern struct {
+        header: EntryHeader,
+        bus: u8,
+        source: u8,
+        gsi: u32,
+        flags: u16,
+    };
+
     pub fn getEntries(self: *const Madt) []const u8 {
         const base = @intFromPtr(self) + @sizeOf(Madt);
         const length = self.header.length - @sizeOf(Madt);

@@ -7,6 +7,7 @@ pub const sched = @import("sched.zig");
 pub const idt = @import("interrupt/idt.zig");
 pub const timer = @import("interrupt/timer.zig");
 pub const syscall = @import("syscall.zig");
+pub const ioapic = @import("interrupt/ioapic.zig");
 
 comptime {
     _ = idt.interrupt_dispatch;

@@ -7,16 +7,11 @@ pub fn countEnabledCpus(madt: *const acpi.Madt) !u32 {
     var off: usize = 0;
 
     while (off < entries.len) {
-        const hdr = @as(
-            *const acpi.Madt.EntryHeader,
-            @ptrCast(@alignCast(&entries[off])),
-        );
-
+        const hdr: *align(1) const acpi.Madt.EntryHeader =
+            @ptrCast(&entries[off]);
         if (@as(acpi.Madt.EntryType, @enumFromInt(hdr.entry_type)) == .local_apic) {
-            const lapic = @as(
-                *const acpi.Madt.LocalApic,
-                @ptrCast(@alignCast(hdr)),
-            );
+            const lapic: *const acpi.Madt.LocalApic =
+                @ptrCast(@alignCast(hdr));
             if (lapic.isEnabled()) count += 1;
         }
 
@@ -31,13 +26,10 @@ pub fn discoverCpus(cpu_mgr: *manager.CpuManager, madt: *const acpi.Madt, bsp_ap
     var off: usize = 0;
 
     while (off < entries.len) {
-        const hdr = @as(*const acpi.Madt.EntryHeader, @ptrCast(@alignCast(&entries[off])));
+        const hdr: *align(1) const acpi.Madt.EntryHeader = @ptrCast(&entries[off]);
 
         if (@as(acpi.Madt.EntryType, @enumFromInt(hdr.entry_type)) == .local_apic) {
-            const lapic = @as(
-                *const acpi.Madt.LocalApic,
-                @ptrCast(@alignCast(hdr)),
-            );
+            const lapic: *const acpi.Madt.LocalApic = @ptrCast(@alignCast(hdr));
 
             if (lapic.isEnabled()) {
                 var is_bsp: u8 = 0;

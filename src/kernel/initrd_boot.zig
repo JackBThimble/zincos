@@ -150,3 +150,19 @@ pub fn bootstrapTestClient(allocator: std.mem.Allocator) BootInitrdError!*Task {
 
     return proc.main_task;
 }
+
+pub fn bootstrapShell(allocator: std.mem.Allocator) BootInitrdError!*Task {
+    const hdr = archive orelse try validate();
+    const entry = hdr.findFile("shell") orelse {
+        log.warn("initrd: no shell binary found", .{});
+        return BootInitrdError.NoVfsClient;
+    };
+    const elf_data = hdr.fileData(entry);
+    log.info("initrd: loading shell '{s}' ({d} bytes)", .{
+        entry.getName(), elf_data.len,
+    });
+    const proc = process.createFromElf(allocator, entry.getName(), elf_data, task.Priority.NORMAL_DEFAULT) catch {
+        return BootInitrdError.ClientLoadFailed;
+    };
+    return proc.main_task;
+}

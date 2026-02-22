@@ -37,6 +37,7 @@ var idt: [IDT_ENTRIES]IdtEntry = [_]IdtEntry{std.mem.zeroes(IdtEntry)} ** IDT_EN
 pub const TIMER_VECTOR: u8 = 32;
 pub const RESCHED_VECTOR: u8 = 33;
 pub const SPURIOUS_VECTOR: u8 = 0xff;
+pub const KEYBOARD_VECTOR: u8 = 34;
 
 pub const InterruptFrame = extern struct {
     r15: u64,
@@ -66,32 +67,23 @@ pub const InterruptFrame = extern struct {
 extern const isr_stub_table: [IDT_ENTRIES]usize;
 
 // =============================================================================
-// Scheduler hooks - function pointers, set once by kernel main.
+// Hooks - function pointers, set once by kernel main.
 // =============================================================================
-const TickFn = *const fn () void;
-const NeedsReschedFn = *const fn () bool;
-const ScheduleFn = *const fn () void;
-const RequestReschedFn = *const fn () void;
-const UserExceptionFn = *const fn (vec: u8, err: u64, rip: u64, cr2: u64) void;
+pub const IDTHooks = struct {
+    tick: *const fn () void,
+    needs_resched: *const fn () bool,
+    schedule: *const fn () void,
+    request_resched: *const fn () void,
+    user_exception: *const fn (vec: u8, err: u64, rip: u64, cr2: u64) void,
+    keyboard: *const fn () void,
+};
 
-var tick_fn: ?TickFn = null;
-var needs_resched_fn: ?NeedsReschedFn = null;
-var schedule_fn: ?ScheduleFn = null;
-var request_resched_fn: ?RequestReschedFn = null;
-var user_exception_fn: ?UserExceptionFn = null;
+var hooks: ?IDTHooks = null;
 
-pub fn installSchedHooks(
-    tick: TickFn,
-    needs_resched: NeedsReschedFn,
-    sched: ScheduleFn,
-    request_resched: RequestReschedFn,
-    user_exception: UserExceptionFn,
+pub fn installHooks(
+    h: IDTHooks,
 ) void {
-    tick_fn = tick;
-    needs_resched_fn = needs_resched;
-    schedule_fn = sched;
-    request_resched_fn = request_resched;
-    user_exception_fn = user_exception;
+    hooks = h;
 }
 
 // =============================================================================
@@ -156,6 +148,12 @@ pub export fn interrupt_dispatch(frame: *InterruptFrame) callconv(.c) void {
         0...31 => handleException(frame),
         TIMER_VECTOR => handleTimer(),
         RESCHED_VECTOR => handleResched(),
+        KEYBOARD_VECTOR => {
+            if (hooks) |h| {
+                h.keyboard();
+            }
+            sendEoi();
+        },
         SPURIOUS_VECTOR => {},
         else => {
             log.warn("Unhandled interrupt vector {}", .{vec});
@@ -165,9 +163,9 @@ pub export fn interrupt_dispatch(frame: *InterruptFrame) callconv(.c) void {
 }
 
 pub export fn sched_check_preempt() callconv(.c) void {
-    const needs = needs_resched_fn orelse return;
-    const do_sched = schedule_fn orelse return;
-    if (needs()) do_sched();
+    if (hooks) |h| {
+        if (h.needs_resched()) h.schedule();
+    }
 }
 
 fn handleException(frame: *const InterruptFrame) void {
@@ -175,8 +173,8 @@ fn handleException(frame: *const InterruptFrame) void {
     const cr2 = if (vec == 14) readCr2() else 0;
 
     if (fromUser(frame)) {
-        if (user_exception_fn) |f| {
-            f(vec, frame.error_code, frame.rip, cr2);
+        if (hooks) |h| {
+            h.user_exception(vec, frame.error_code, frame.rip, cr2);
             return; // ssched_check_preempt runs right after dispatch
         }
     }
@@ -202,12 +200,14 @@ fn handleException(frame: *const InterruptFrame) void {
 }
 
 fn handleTimer() void {
-    if (tick_fn) |f| f();
-    sendEoi();
+    if (hooks) |h| {
+        h.tick();
+        sendEoi();
+    }
 }
 
 fn handleResched() void {
-    if (request_resched_fn) |f| f();
+    if (hooks) |h| h.request_resched();
     sendEoi();
 }
 

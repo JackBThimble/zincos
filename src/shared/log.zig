@@ -1,4 +1,5 @@
 const std = @import("std");
+const types = @import("types.zig");
 
 // ----------------------
 // Enums
@@ -63,27 +64,71 @@ pub const TscFn = *const fn () u64;
 // Backends (injected by kernel)
 // ===================================
 var write_fn: ?WriteFn = null;
+var emergency_write_fn: ?WriteFn = null;
 var cpu_id_fn: ?CpuIdFn = null;
 var tsc_fn: ?TscFn = null;
+
+const MAX_CPUS = types.MAX_CPUS;
+const LOG_LOCK_SPIN_LIMIT: usize = 1_000_000;
+var cpu_log_depth: [MAX_CPUS]std.atomic.Value(u32) = [_]std.atomic.Value(u32){std.atomic.Value(u32).init(0)} ** MAX_CPUS;
 
 // ==================================
 // Spinlock (SMP-safe)
 // ==================================
-var lock: bool = false;
+var lock: SpinLock = .{};
 
-fn acquire() void {
-    while (@atomicRmw(bool, &lock, .Xchg, true, .acquire)) {}
-}
+const SpinLock = struct {
+    locked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
-fn release() void {
-    @atomicStore(bool, &lock, false, .release);
-}
+    /// Acquire the lock, disabling interrupts to prevent preemption.
+    /// Returns saved RFLAGS so release() can restore interrupt state.
+    /// Returns null if lock ownership appears stuck.
+    pub fn acquire(self: *SpinLock) ?u64 {
+        // Save current flags and disable interrupts before spinning
+        const flags = readFlags();
+        asm volatile ("cli" ::: .{ .memory = true });
+
+        var spins: usize = 0;
+        while (self.locked.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+            spins += 1;
+            if (spins >= LOG_LOCK_SPIN_LIMIT) {
+                if (flags & 0x200 != 0) {
+                    asm volatile ("sti" ::: .{ .memory = true });
+                }
+                return null;
+            }
+            std.atomic.spinLoopHint();
+        }
+
+        return flags;
+    }
+
+    /// Release the lock and restore the saved interrupt state.
+    pub fn release(self: *SpinLock, flags: u64) void {
+        self.locked.store(false, .release);
+        // Restore IF only if it was originally set
+        if (flags & 0x200 != 0) {
+            asm volatile ("sti" ::: .{ .memory = true });
+        }
+    }
+
+    inline fn readFlags() u64 {
+        return asm volatile ("pushfq; pop %[flags]"
+            : [flags] "=r" (-> u64),
+        );
+    }
+};
 
 // =====================================
 // Public setup API
 // =====================================
 pub fn setWriter(w: WriteFn) void {
+    if (emergency_write_fn == null) emergency_write_fn = w;
     write_fn = w;
+}
+
+pub fn setEmergencyWriter(w: WriteFn) void {
+    emergency_write_fn = w;
 }
 
 pub fn setCpuId(f: CpuIdFn) void {
@@ -94,6 +139,28 @@ pub fn setTscFn(f: TscFn) void {
     tsc_fn = f;
 }
 
+fn currentCpuSlot() usize {
+    const cpu_id = if (cpu_id_fn) |f| f() else 0;
+    return if (cpu_id < MAX_CPUS) cpu_id else 0;
+}
+
+fn enterLog(cpu_slot: usize) bool {
+    const prev = cpu_log_depth[cpu_slot].fetchAdd(1, .acquire);
+    return prev == 0;
+}
+
+fn leaveLog(cpu_slot: usize) void {
+    _ = cpu_log_depth[cpu_slot].fetchSub(1, .release);
+}
+
+fn emergencyWrite(bytes: []const u8) void {
+    if (emergency_write_fn) |w| {
+        w(bytes);
+        return;
+    }
+    if (write_fn) |w| w(bytes);
+}
+
 // =====================================
 // Core logger
 // =====================================
@@ -102,7 +169,7 @@ fn log(comptime level: Level, comptime fmt: []const u8, args: anytype) void {
     // Filter log levels
     if (@intFromEnum(level) > @intFromEnum(LOG_LEVEL)) return;
     // Is backend set??
-    if (write_fn == null) return;
+    const primary = write_fn orelse return;
 
     var buf: [1024]u8 = undefined;
 
@@ -117,9 +184,22 @@ fn log(comptime level: Level, comptime fmt: []const u8, args: anytype) void {
     const all_args = .{ level.color().code(), tsc, cpu_id, level.name() } ++ args ++ .{Color.reset.code()};
     const out_str = std.fmt.bufPrint(&buf, full_fmt, all_args) catch return;
 
-    acquire();
-    write_fn.?(out_str);
-    release();
+    const cpu_slot = currentCpuSlot();
+    const first_entry = enterLog(cpu_slot);
+    defer leaveLog(cpu_slot);
+
+    if (!first_entry) {
+        emergencyWrite(out_str);
+        return;
+    }
+
+    if (lock.acquire()) |flags| {
+        defer lock.release(flags);
+        primary(out_str);
+        return;
+    }
+
+    emergencyWrite(out_str);
 }
 
 pub fn info(comptime fmt: []const u8, args: anytype) void {
@@ -139,9 +219,25 @@ pub fn debug(comptime fmt: []const u8, args: anytype) void {
 }
 
 pub fn raw(bytes: []const u8) void {
-    if (write_fn) |w| {
-        acquire();
-        w(bytes);
-        release();
+    const primary = write_fn orelse {
+        emergencyWrite(bytes);
+        return;
+    };
+
+    const cpu_slot = currentCpuSlot();
+    const first_entry = enterLog(cpu_slot);
+    defer leaveLog(cpu_slot);
+
+    if (!first_entry) {
+        emergencyWrite(bytes);
+        return;
     }
+
+    if (lock.acquire()) |flags| {
+        defer lock.release(flags);
+        primary(bytes);
+        return;
+    }
+
+    emergencyWrite(bytes);
 }
