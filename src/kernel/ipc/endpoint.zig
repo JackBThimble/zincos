@@ -94,15 +94,70 @@ const SpinLock = struct {
 // =============================================================================
 
 pub const Endpoint = struct {
+    pub const State = enum(u8) { live, closing, dead };
+
     id: u32,
     lock: SpinLock = .{},
     send_queue: WaitQueue = .{},
     recv_queue: WaitQueue = .{},
     pending_notifications: u64 = 0,
     alive: bool = true,
+    refcount: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
+    state: std.atomic.Value(State) = std.atomic.Value(State).init(.live),
+    allocator: std.mem.Allocator,
 
-    pub fn init(id: u32) Endpoint {
-        return .{ .id = id };
+    pub fn init(id: u32, allocator: std.mem.Allocator) Endpoint {
+        return .{ .id = id, .allocator = allocator };
+    }
+
+    /// Acquire an endpoint ref.
+    /// Fails when endpoint is no longer live.
+    pub fn refGet(self: *Endpoint) bool {
+        while (true) {
+            if (self.state.load(.acquire) != .live) return false;
+            const cur = self.refcount.load(.acquire);
+            if (cur == 0) return false;
+            if (self.refcount.cmpxchgWeak(cur, cur + 1, .acq_rel, .acquire) == null) {
+                return true;
+            }
+        }
+    }
+
+    /// Drop endpoint ref; frees object when last ref is dropped
+    pub fn refPut(self: *Endpoint) void {
+        const prev = self.refcount.fetchSub(1, .acq_rel);
+        std.debug.assert(prev > 0);
+
+        if (prev == 1) {
+            self.state.store(.dead, .release);
+            self.allocator.destroy(self);
+        }
+    }
+
+    /// Transition endpoint to closing and wake all waiters.
+    /// Idempotent
+    pub fn beginClose(self: *Endpoint) void {
+        const was_live = self.state.cmpxchgStrong(.live, .closing, .acq_rel, .acquire);
+        if (was_live != null) {
+            return;
+        }
+
+        const flags = sched_arch.disableIrq();
+        self.lock.acquire();
+
+        self.alive = false;
+
+        while (self.send_queue.dequeue()) |task| {
+            task.ipc.waiting_for_reply = false;
+            sched.wake(task);
+        }
+
+        while (self.recv_queue.dequeue()) |task| {
+            sched.wake(task);
+        }
+
+        self.lock.release();
+        sched_arch.restoreIrq(flags);
     }
 
     // =========================================================================
@@ -141,7 +196,6 @@ pub const Endpoint = struct {
         self.send_queue.enqueue(task);
         self.lock.release();
 
-        // Schedule away. We return here when a receiver wakes us.
         sched.schedule();
         sched_arch.restoreIrq(flags);
     }

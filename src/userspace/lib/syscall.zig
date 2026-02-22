@@ -61,6 +61,14 @@ pub fn sysIpcReceive(endpoint: Handle, out_msg: *ipc.Message, out_caller: *Handl
         : .{ .rcx = true, .r11 = true, .memory = true });
 }
 
+pub fn sysIpcDestroyEndpoint(endpoint: Handle) u64 {
+    return asm volatile ("syscall"
+        : [ret] "={rax}" (-> u64),
+        : [num] "{rax}" (@intFromEnum(sc.Number.ipc_destroy_endpoint)),
+          [ep] "{rdi}" (endpoint),
+        : .{ .rcx = true, .r11 = true, .memory = true });
+}
+
 pub fn sysSchedYield() void {
     _ = asm volatile ("syscall"
         : [ret] "={rax}" (-> u64),

@@ -17,16 +17,17 @@ pub const Number = enum(u64) {
     ipc_receive = 18,
     ipc_call = 19,
     ipc_reply = 20,
-    ipc_notify = 21,
+    ipc_destroy_endpoint = 21,
+    ipc_notify = 22,
 
-    shm_create = 22,
-    shm_grant = 23,
-    shm_map = 24,
-    shm_unmap = 25,
-    shm_destroy = 26,
+    shm_create = 23,
+    shm_grant = 24,
+    shm_map = 25,
+    shm_unmap = 26,
+    shm_destroy = 27,
 
     // Early-boot service discovery shim.
-    vfs_get_bootstrap_endpoint = 27,
+    vfs_get_bootstrap_endpoint = 28,
 };
 
 pub const Errno = enum(i64) {

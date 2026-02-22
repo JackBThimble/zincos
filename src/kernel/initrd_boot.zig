@@ -35,7 +35,7 @@ pub const BootInitrdError = error{
 var initrd_base: ?[*]const u8 = null;
 var initrd_size: usize = 0;
 var archive: ?*const initrd.ArchiveHeader = null;
-var bootstrap_vfs_endpoint: ?ipc.EndpointId = null;
+var bootstrap_vfs_endpoint: ?ipc.EndpointToken = null;
 
 pub fn setInitrd(base: [*]const u8, size: usize) void {
     initrd_base = base;
@@ -107,9 +107,9 @@ pub fn bootstrap(allocator: std.mem.Allocator) BootInitrdError!*Task {
         return BootInitrdError.ElfLoadFailed;
     };
 
-    const endpoint = ipc.createEndpoint(proc.pid) catch return BootInitrdError.EndpointCreateFailed;
-    const vfs_handle = ipc.handles.installEndpoint(proc.pid, endpoint) catch return BootInitrdError.EndpointCreateFailed;
-    bootstrap_vfs_endpoint = endpoint;
+    const endpoint_tok = ipc.createEndpoint(proc.pid) catch return BootInitrdError.EndpointCreateFailed;
+    const vfs_handle = ipc.handles.installEndpoint(proc.pid, endpoint_tok) catch return BootInitrdError.EndpointCreateFailed;
+    bootstrap_vfs_endpoint = endpoint_tok;
 
     const base = initrd_base orelse return BootInitrdError.InitrdNotFound;
     const initrd_phys = arch.virtToPhys(@intFromPtr(base));
@@ -130,7 +130,7 @@ pub fn bootstrap(allocator: std.mem.Allocator) BootInitrdError!*Task {
     return proc.main_task;
 }
 
-pub fn getBootstrapVfsEndpoint() ?ipc.EndpointId {
+pub fn getBootstrapVfsEndpoint() ?ipc.EndpointToken {
     return bootstrap_vfs_endpoint;
 }
 

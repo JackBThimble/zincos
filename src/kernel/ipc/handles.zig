@@ -3,7 +3,7 @@ const process = @import("../process/mod.zig");
 const sched = @import("../sched/mod.zig");
 const registry = @import("registry.zig");
 const Task = @import("../sched/task.zig").Task;
-const EndpointId = registry.EndpointId;
+const EndpointToken = registry.EndpointToken;
 
 pub const Handle = u32;
 
@@ -35,7 +35,7 @@ const Kind = enum(u2) {
 };
 
 const HandleEntry = union(Kind) {
-    endpoint: EndpointId,
+    endpoint: EndpointToken,
     caller: *Task,
 };
 
@@ -44,7 +44,7 @@ const Slot = struct {
     occupied: bool = false,
     kind: Kind = .endpoint,
     rights: u4 = 0,
-    entry: HandleEntry = .{ .endpoint = 0 },
+    entry: HandleEntry = .{ .endpoint = .{ .id = registry.INVALID_EP, .gen = 0 } },
 };
 
 const ProcessHandles = struct {
@@ -136,7 +136,7 @@ const ProcessHandles = struct {
     fn freeSlot(_: *ProcessHandles, slot: *Slot) void {
         slot.occupied = false;
         slot.rights = 0;
-        slot.entry = .{ .endpoint = 0 };
+        slot.entry = .{ .endpoint = .{ .id = registry.INVALID_EP, .gen = 0 } };
 
         var next_gen: u12 = slot.generation +% 1;
         if (next_gen == 0) next_gen = 1;
@@ -185,7 +185,7 @@ fn getOrCreate(pid: process.ProcessId) !*ProcessHandles {
     return gop.value_ptr;
 }
 
-pub fn installEndpoint(pid: process.ProcessId, endpoint: EndpointId) !Handle {
+pub fn installEndpoint(pid: process.ProcessId, endpoint: EndpointToken) !Handle {
     lock.acquire();
     defer lock.release();
 
@@ -199,7 +199,7 @@ pub fn installEndpoint(pid: process.ProcessId, endpoint: EndpointId) !Handle {
 /// Kernel-only helper for granting an endpoint capability into another process.
 /// This intentionally skips the owner_pid check and should only be used by
 /// trusted kernel bootstrap code.
-pub fn installEndpointInto(pid: process.ProcessId, endpoint: EndpointId, rights: u4) !Handle {
+pub fn installEndpointInto(pid: process.ProcessId, endpoint: EndpointToken, rights: u4) !Handle {
     lock.acquire();
     defer lock.release();
 
@@ -209,7 +209,7 @@ pub fn installEndpointInto(pid: process.ProcessId, endpoint: EndpointId, rights:
     return handles.install(global_allocator.?, .{ .endpoint = endpoint }, rights);
 }
 
-pub fn resolveEndpoint(pid: process.ProcessId, handle: Handle, required_rights: u4) ?EndpointId {
+pub fn resolveEndpoint(pid: process.ProcessId, handle: Handle, required_rights: u4) ?EndpointToken {
     lock.acquire();
     defer lock.release();
 

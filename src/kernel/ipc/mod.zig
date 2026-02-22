@@ -19,7 +19,9 @@ pub const Endpoint = @import("endpoint.zig").Endpoint;
 pub const WaitQueue = @import("endpoint.zig").WaitQueue;
 pub const registry = @import("registry.zig");
 pub const handles = @import("handles.zig");
+
 pub const EndpointId = registry.EndpointId;
+pub const EndpointToken = registry.EndpointToken;
 
 const Task = @import("../sched/task.zig").Task;
 
@@ -29,22 +31,29 @@ pub fn init(allocator: std.mem.Allocator) void {
     log.info("IPC subsystem initialized", .{});
 }
 
-pub fn createEndpoint(owner_pid: process.ProcessId) !EndpointId {
+pub fn createEndpoint(owner_pid: process.ProcessId) !EndpointToken {
     return registry.create(owner_pid);
 }
 
-pub fn send(ep_id: EndpointId, msg: *const Message) !void {
-    const ep = registry.lookup(ep_id) orelse return error.InvalidEndpoint;
+pub fn destroyEndpoint(tok: EndpointToken, caller_pid: process.ProcessId) !void {
+    return registry.destroy(tok, caller_pid);
+}
+
+pub fn send(tok: EndpointToken, msg: *const Message) !void {
+    const ep = registry.acquire(tok) orelse return error.InvalidEndpoint;
+    defer registry.release(ep);
     return ep.send(msg);
 }
 
-pub fn receive(ep_id: EndpointId) !Endpoint.ReceiveResult {
-    const ep = registry.lookup(ep_id) orelse return error.InvalidEndpoint;
+pub fn receive(tok: EndpointToken) !Endpoint.ReceiveResult {
+    const ep = registry.acquire(tok) orelse return error.InvalidEndpoint;
+    defer registry.release(ep);
     return ep.receive();
 }
 
-pub fn call(ep_id: EndpointId, msg: *const Message, reply_buf: *Message) !void {
-    const ep = registry.lookup(ep_id) orelse return error.InvalidEndpoint;
+pub fn call(tok: EndpointToken, msg: *const Message, reply_buf: *Message) !void {
+    const ep = registry.acquire(tok) orelse return error.InvalidEndpoint;
+    defer registry.release(ep);
     return ep.call(msg, reply_buf);
 }
 
@@ -52,7 +61,8 @@ pub fn reply(caller: *Task, msg: *const Message) void {
     Endpoint.reply(caller, msg);
 }
 
-pub fn notify(ep_id: EndpointId) !void {
-    const ep = registry.lookup(ep_id) orelse return error.InvalidEndpoint;
+pub fn notify(tok: EndpointToken) !void {
+    const ep = registry.acquire(tok) orelse return error.InvalidEndpoint;
+    defer registry.release(ep);
     return ep.notify();
 }

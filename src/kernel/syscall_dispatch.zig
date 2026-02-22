@@ -153,21 +153,21 @@ pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
         @intFromEnum(sc.Number.ipc_send) => {
             const endpoint_handle = parseHandle(arg0) orelse return retErr(.INVAL);
             const pid = process.currentPid();
-            const ep_id = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.send) orelse return retErr(.BADF);
+            const ep_tok = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.send) orelse return retErr(.BADF);
 
             var req: ipc.Message = undefined;
             const task = sched.currentTask() orelse return retErr(.INVAL);
             if (!uaccess.copyFromUserValue(ipc.Message, task, arg1, &req)) return retErr(.FAULT);
-            ipc.send(ep_id, &req) catch |err| return retErr(mapEndpointError(err));
+            ipc.send(ep_tok, &req) catch |err| return retErr(mapEndpointError(err));
             return 0;
         },
         @intFromEnum(sc.Number.ipc_receive) => {
             const endpoint_handle = parseHandle(arg0) orelse return retErr(.INVAL);
             const pid = process.currentPid();
-            const ep_id = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.receive) orelse return retErr(.BADF);
+            const ep_tok = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.receive) orelse return retErr(.BADF);
 
             const task = sched.currentTask() orelse return retErr(.INVAL);
-            const res = ipc.receive(ep_id) catch |err| return retErr(mapEndpointError(err));
+            const res = ipc.receive(ep_tok) catch |err| return retErr(mapEndpointError(err));
             if (!uaccess.copyToUserValue(ipc.Message, task, arg1, &res.msg)) return retErr(.FAULT);
 
             if (arg2 != 0) {
@@ -188,13 +188,13 @@ pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
         @intFromEnum(sc.Number.ipc_call) => {
             const endpoint_handle = parseHandle(arg0) orelse return retErr(.INVAL);
             const pid = process.currentPid();
-            const ep_id = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.call) orelse return retErr(.BADF);
+            const ep_tok = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.call) orelse return retErr(.BADF);
             const task = sched.currentTask() orelse return retErr(.INVAL);
             var req: ipc.Message = undefined;
             if (!uaccess.copyFromUserValue(ipc.Message, task, arg1, &req)) return retErr(.FAULT);
 
             var reply: ipc.Message = undefined;
-            ipc.call(ep_id, &req, &reply) catch |err| return retErr(mapEndpointError(err));
+            ipc.call(ep_tok, &req, &reply) catch |err| return retErr(mapEndpointError(err));
 
             const curr = sched.currentTask() orelse return retErr(.INVAL);
             reply = curr.ipc.msg;
@@ -212,12 +212,24 @@ pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
             ipc.reply(caller, &reply);
             return 0;
         },
+        @intFromEnum(sc.Number.ipc_destroy_endpoint) => {
+            const endpoint_handle = parseHandle(arg0) orelse return retErr(.INVAL);
+            const pid = process.currentPid();
+            const ep_tok = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.send) orelse return retErr(.BADF);
+
+            ipc.destroyEndpoint(ep_tok, pid) catch |err| return switch (err) {
+                error.InvalidEndpoint => retErr(.BADF),
+                error.PermissionDenied => retErr(.BADF),
+                error.NotInitialized => retErr(.NODEV),
+            };
+            return 0;
+        },
         @intFromEnum(sc.Number.ipc_notify) => {
             const endpoint_handle = parseHandle(arg0) orelse return retErr(.INVAL);
             const pid = process.currentPid();
-            const ep_id = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.send) orelse return retErr(.BADF);
+            const ep_tok = ipc.handles.resolveEndpoint(pid, endpoint_handle, ipc.handles.Rights.send) orelse return retErr(.BADF);
 
-            ipc.notify(ep_id) catch |err| return retErr(mapEndpointError(err));
+            ipc.notify(ep_tok) catch |err| return retErr(mapEndpointError(err));
             return 0;
         },
         @intFromEnum(sc.Number.shm_create) => {
