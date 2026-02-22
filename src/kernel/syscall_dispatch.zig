@@ -1,6 +1,7 @@
 const std = @import("std");
 const arch = @import("arch");
 const shared = @import("shared");
+const mm = @import("mm");
 
 const ipc = @import("ipc/mod.zig");
 const console = @import("console.zig");
@@ -18,6 +19,8 @@ const SERIAL_STDIN_FD: u64 = 0;
 const SERIAL_STDOUT_FD: u64 = 1;
 const SERIAL_STDERR_FD: u64 = 2;
 
+const USER_ADDR_MAX: u64 = mm.address_space.USER_ADDR_MAX;
+
 fn retErr(code: sc.Errno) u64 {
     return sc.encodeErrno(code);
 }
@@ -31,13 +34,22 @@ fn parseShmId(raw: u64) ?shm.ShmId {
 }
 
 fn parseMsgPtr(raw: u64) ?*ipc.Message {
-    if (raw == 0) return null;
+    if (!validateUserRange(raw, @sizeOf(ipc.Message))) return null;
     return @ptrFromInt(raw);
 }
 
 fn parseMsgPtrConst(raw: u64) ?*const ipc.Message {
-    if (raw == 0) return null;
+    if (!validateUserRange(raw, @sizeOf(ipc.Message))) return null;
     return @ptrFromInt(raw);
+}
+
+fn validateUserRange(raw: u64, len: usize) bool {
+    if (raw == 0) return len == 0;
+    if (raw > USER_ADDR_MAX) return false;
+    if (len == 0) return true;
+
+    const last = std.math.add(u64, raw, @as(u64, @intCast(len - 1))) catch return false;
+    return last <= USER_ADDR_MAX;
 }
 
 fn mapCreateError(err: anyerror) sc.Errno {
@@ -99,6 +111,7 @@ pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
             if (badFd(fd, true)) return retErr(.BADF);
             if (buf_ptr == 0) return retErr(.FAULT);
             if (len == 0) return 0;
+            if (!validateUserRange(buf_ptr, len)) return retErr(.FAULT);
 
             const out: [*]u8 = @ptrFromInt(buf_ptr);
             const task = sched.currentTask() orelse return retErr(.INVAL);
@@ -110,6 +123,7 @@ pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
             const len: usize = std.math.cast(usize, arg2) orelse return retErr(.INVAL);
             if (badFd(fd, false)) return retErr(.BADF);
             if (buf_ptr == 0 and len != 0) return retErr(.FAULT);
+            if (!validateUserRange(buf_ptr, len)) return retErr(.FAULT);
 
             const bytes: []const u8 = @as([*]const u8, @ptrFromInt(buf_ptr))[0..len];
             arch.serial.write(bytes);
@@ -146,6 +160,7 @@ pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
             out_msg.* = res.msg;
 
             if (arg2 != 0) {
+                if (!validateUserRange(arg2, @sizeOf(u64))) return retErr(.FAULT);
                 const out_caller: *u64 = @ptrFromInt(arg2);
                 if (res.caller) |caller| {
                     const caller_handle = ipc.handles.installCaller(pid, caller) catch |err| return switch (err) {

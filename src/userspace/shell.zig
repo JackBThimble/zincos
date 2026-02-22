@@ -135,7 +135,7 @@ fn cmdEcho(args: []const u8) void {
 
 fn cmdPid() void {
     const pid = sysGetPid();
-    writeFmt("cpu={}\n", .{pid});
+    writeFmt("pid={}\n", .{pid});
 }
 
 fn cmdCpuId() void {
