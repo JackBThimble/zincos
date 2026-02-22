@@ -1,31 +1,27 @@
 //! Minimal userspace RamFS server backed by initrd.
 
 const std = @import("std");
-const shared = @import("shared");
+const lib = @import("lib");
 
-const initrd = shared.initrd;
-const vfs = shared.vfs_protocol;
-const sc = shared.syscall;
-const IpcMessage = shared.ipc_message.Message;
+const initrd = lib.initrd;
+const ipc = lib.ipc;
+const vfs = lib.vfs;
+const sc = lib.syscall;
+const IpcMessage = lib.ipc.Message;
 
 const Handle = u64;
-const PAYLOAD_WORDS: u4 = @intCast(shared.ipc_message.MAX_DATA_WORDS);
-const MAX_OPEN_FILES: usize = 64;
-
-const OpenFile = struct {
-    entry: *const initrd.FileEntry,
-};
+const PAYLOAD_WORDS: u4 = @intCast(ipc.MAX_DATA_WORDS);
 
 var g_archive: ?*const initrd.ArchiveHeader = null;
-var g_open: [MAX_OPEN_FILES]?OpenFile = [_]?OpenFile{null} ** MAX_OPEN_FILES;
+var g_open: [lib.MAX_OPEN_FILES]?lib.OpenFile = [_]?lib.OpenFile{null} ** lib.MAX_OPEN_FILES;
 
 pub export fn _start(initrd_addr: usize, initrd_size: usize, vfs_endpoint: Handle) callconv(.c) noreturn {
     const base: [*]const u8 = @ptrFromInt(initrd_addr);
-    if (initrd_size < @sizeOf(initrd.ArchiveHeader)) hang();
+    if (initrd_size < @sizeOf(initrd.ArchiveHeader)) lib.syscall.hang();
 
     const hdr: *const initrd.ArchiveHeader = @ptrCast(@alignCast(base));
-    if (!hdr.isValid()) hang();
-    if (hdr.total_size > initrd_size) hang();
+    if (!hdr.isValid()) lib.syscall.hang();
+    if (hdr.total_size > initrd_size) lib.syscall.hang();
 
     g_archive = hdr;
     run(vfs_endpoint);
@@ -36,14 +32,14 @@ fn run(endpoint: Handle) noreturn {
         var req: IpcMessage = .{};
         var caller: Handle = 0;
 
-        const rc = sysIpcReceive(endpoint, &req, &caller);
-        if (isSysErr(rc) or caller == 0) {
-            sysSchedYield();
+        const rc = lib.syscall.sysIpcReceive(endpoint, &req, &caller);
+        if (lib.syscall.isSysErr(rc) or caller == 0) {
+            lib.syscall.sysSchedYield();
             continue;
         }
 
         const reply = handleRequest(&req);
-        _ = sysIpcReply(caller, &reply);
+        _ = lib.syscall.sysIpcReply(caller, &reply);
     }
 }
 
@@ -59,8 +55,8 @@ fn handleRequest(req_msg: *const IpcMessage) IpcMessage {
 }
 
 fn handleOpen(req_msg: *const IpcMessage) IpcMessage {
-    const req = vfs.deserialize(vfs.OpenRequest, payloadOfConst(req_msg));
-    const name = trimCString(req.name[0..]);
+    const req = vfs.deserialize(vfs.OpenRequest, lib.payloadOfConst(req_msg));
+    const name = lib.trimCString(req.name[0..]);
     const hdr = g_archive orelse return makeErrorReply(vfs.VfsError.io_error);
     const entry = hdr.findFile(name) orelse return makeErrorReply(vfs.VfsError.not_found);
     const fd = allocFd(entry) orelse return makeErrorReply(vfs.VfsError.no_space);
@@ -72,12 +68,12 @@ fn handleOpen(req_msg: *const IpcMessage) IpcMessage {
     };
 
     var reply = IpcMessage.init(@intFromEnum(vfs.VfsOp.ok), PAYLOAD_WORDS);
-    payloadOf(&reply).* = vfs.serialize(vfs.OpenResponse, &resp);
+    lib.payloadOf(&reply).* = vfs.serialize(vfs.OpenResponse, &resp);
     return reply;
 }
 
 fn handleRead(req_msg: *const IpcMessage) IpcMessage {
-    const req = vfs.deserialize(vfs.ReadRequest, payloadOfConst(req_msg));
+    const req = vfs.deserialize(vfs.ReadRequest, lib.payloadOfConst(req_msg));
     const fd: u32 = req.fd;
     const open = lookupFd(fd) orelse return makeErrorRead(vfs.VfsError.invalid_fd);
     const hdr = g_archive orelse return makeErrorRead(vfs.VfsError.io_error);
@@ -100,12 +96,12 @@ fn handleRead(req_msg: *const IpcMessage) IpcMessage {
     }
 
     var reply = IpcMessage.init(@intFromEnum(vfs.VfsOp.read_inline), PAYLOAD_WORDS);
-    payloadOf(&reply).* = vfs.serialize(vfs.ReadResponse, &resp);
+    lib.payloadOf(&reply).* = vfs.serialize(vfs.ReadResponse, &resp);
     return reply;
 }
 
 fn handleClose(req_msg: *const IpcMessage) IpcMessage {
-    const req = vfs.deserialize(vfs.CloseRequest, payloadOfConst(req_msg));
+    const req = vfs.deserialize(vfs.CloseRequest, lib.payloadOfConst(req_msg));
     if (!freeFd(req.fd)) {
         return makeErrorReply(vfs.VfsError.invalid_fd);
     }
@@ -114,7 +110,7 @@ fn handleClose(req_msg: *const IpcMessage) IpcMessage {
 }
 
 fn handleStat(req_msg: *const IpcMessage) IpcMessage {
-    const req = vfs.deserialize(vfs.StatRequest, payloadOfConst(req_msg));
+    const req = vfs.deserialize(vfs.StatRequest, lib.payloadOfConst(req_msg));
     const open = lookupFd(req.fd) orelse return makeErrorStat(vfs.VfsError.invalid_fd);
 
     const flags_bits: u32 = @bitCast(open.entry.flags);
@@ -125,7 +121,7 @@ fn handleStat(req_msg: *const IpcMessage) IpcMessage {
     };
 
     var reply = IpcMessage.init(@intFromEnum(vfs.VfsOp.stat_data), PAYLOAD_WORDS);
-    payloadOf(&reply).* = vfs.serialize(vfs.StatResponse, &resp);
+    lib.payloadOf(&reply).* = vfs.serialize(vfs.StatResponse, &resp);
     return reply;
 }
 
@@ -136,7 +132,7 @@ fn makeErrorReply(err: vfs.VfsError) IpcMessage {
         .err = err,
     };
     var reply = IpcMessage.init(@intFromEnum(vfs.VfsOp.err), PAYLOAD_WORDS);
-    payloadOf(&reply).* = vfs.serialize(vfs.OpenResponse, &resp);
+    lib.payloadOf(&reply).* = vfs.serialize(vfs.OpenResponse, &resp);
     return reply;
 }
 
@@ -147,7 +143,7 @@ fn makeErrorRead(err: vfs.VfsError) IpcMessage {
         .inline_data = [_]u8{0} ** 32,
     };
     var reply = IpcMessage.init(@intFromEnum(vfs.VfsOp.err), PAYLOAD_WORDS);
-    payloadOf(&reply).* = vfs.serialize(vfs.ReadResponse, &resp);
+    lib.payloadOf(&reply).* = vfs.serialize(vfs.ReadResponse, &resp);
     return reply;
 }
 
@@ -158,20 +154,13 @@ fn makeErrorStat(err: vfs.VfsError) IpcMessage {
         .err = err,
     };
     var reply = IpcMessage.init(@intFromEnum(vfs.VfsOp.err), PAYLOAD_WORDS);
-    payloadOf(&reply).* = vfs.serialize(vfs.StatResponse, &resp);
+    lib.payloadOf(&reply).* = vfs.serialize(vfs.StatResponse, &resp);
     return reply;
-}
-
-fn trimCString(buf: []const u8) []const u8 {
-    for (buf, 0..) |c, i| {
-        if (c == 0) return buf[0..i];
-    }
-    return buf;
 }
 
 fn allocFd(entry: *const initrd.FileEntry) ?u32 {
     // fd 0 is reserved.
-    for (1..MAX_OPEN_FILES) |idx| {
+    for (1..lib.MAX_OPEN_FILES) |idx| {
         if (g_open[idx] == null) {
             g_open[idx] = .{ .entry = entry };
             return @intCast(idx);
@@ -180,60 +169,16 @@ fn allocFd(entry: *const initrd.FileEntry) ?u32 {
     return null;
 }
 
-fn lookupFd(fd: u32) ?OpenFile {
+fn lookupFd(fd: u32) ?lib.OpenFile {
     const idx: usize = fd;
-    if (idx == 0 or idx >= MAX_OPEN_FILES) return null;
+    if (idx == 0 or idx >= lib.MAX_OPEN_FILES) return null;
     return g_open[idx];
 }
 
 fn freeFd(fd: u32) bool {
     const idx: usize = fd;
-    if (idx == 0 or idx >= MAX_OPEN_FILES) return false;
+    if (idx == 0 or idx >= lib.MAX_OPEN_FILES) return false;
     if (g_open[idx] == null) return false;
     g_open[idx] = null;
     return true;
-}
-
-fn payloadOf(msg: *IpcMessage) *[vfs.IPC_PAYLOAD_BYTES]u8 {
-    return @ptrCast(&msg.data);
-}
-
-fn payloadOfConst(msg: *const IpcMessage) *const [vfs.IPC_PAYLOAD_BYTES]u8 {
-    return @ptrCast(&msg.data);
-}
-
-fn isSysErr(ret: u64) bool {
-    return @as(i64, @bitCast(ret)) < 0;
-}
-
-fn sysIpcReceive(endpoint: Handle, out_msg: *IpcMessage, out_caller: *Handle) u64 {
-    return asm volatile ("syscall"
-        : [ret] "={rax}" (-> u64),
-        : [num] "{rax}" (@intFromEnum(sc.Number.ipc_receive)),
-          [ep] "{rdi}" (endpoint),
-          [msg] "{rsi}" (@as(u64, @intCast(@intFromPtr(out_msg)))),
-          [caller] "{rdx}" (@as(u64, @intCast(@intFromPtr(out_caller)))),
-        : .{ .rcx = true, .r11 = true, .memory = true });
-}
-
-fn sysIpcReply(caller: Handle, msg: *const IpcMessage) u64 {
-    return asm volatile ("syscall"
-        : [ret] "={rax}" (-> u64),
-        : [num] "{rax}" (@intFromEnum(sc.Number.ipc_reply)),
-          [caller] "{rdi}" (caller),
-          [msg] "{rsi}" (@as(u64, @intCast(@intFromPtr(msg)))),
-        : .{ .rcx = true, .r11 = true, .memory = true });
-}
-
-fn sysSchedYield() void {
-    _ = asm volatile ("syscall"
-        : [ret] "={rax}" (-> u64),
-        : [num] "{rax}" (@intFromEnum(sc.Number.sched_yield)),
-        : .{ .rcx = true, .r11 = true, .memory = true });
-}
-
-fn hang() noreturn {
-    while (true) {
-        sysSchedYield();
-    }
 }

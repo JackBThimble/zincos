@@ -72,11 +72,25 @@ pub fn build(b: *std.Build) void {
         .optimize = kernel_optimize,
     });
 
+    const syscall_fault_test_module = b.addModule("syscall_fault_test_module", .{
+        .root_source_file = b.path("src/userspace/syscall_fault_tests.zig"),
+        .target = user_target,
+        .optimize = kernel_optimize,
+    });
+
+    const lib_module = b.addModule("lib_module", .{
+        .root_source_file = b.path("src/userspace/lib/mod.zig"),
+        .target = user_target,
+        .optimize = kernel_optimize,
+    });
+
     // Imports
     efi_module.addImport("shared", shared_module);
     arch_module.addImport("mm", mm_module);
     arch_module.addImport("shared", shared_module);
     shared_module.addImport("arch", arch_module);
+    lib_module.addImport("shared", shared_module);
+    syscall_fault_test_module.addImport("lib", lib_module);
 
     mm_module.addImport("shared", shared_module);
     mm_module.addImport("arch", arch_module);
@@ -86,9 +100,9 @@ pub fn build(b: *std.Build) void {
     kernel_module.addImport("mm", mm_module);
 
     initrd_packer_module.addImport("shared", shared_module);
-    vfs_client_module.addImport("shared", shared_module);
-    ramfs_server_module.addImport("shared", shared_module);
-    shell_module.addImport("shared", shared_module);
+    vfs_client_module.addImport("lib", lib_module);
+    ramfs_server_module.addImport("lib", lib_module);
+    shell_module.addImport("lib", lib_module);
 
     // Executables
     const efi_exe = b.addExecutable(.{
@@ -120,6 +134,11 @@ pub fn build(b: *std.Build) void {
     const shell_exe = b.addExecutable(.{
         .name = "shell",
         .root_module = shell_module,
+    });
+
+    const syscall_fault_test_exe = b.addExecutable(.{
+        .name = "syscall_test",
+        .root_module = syscall_fault_test_module,
     });
 
     kernel_exe.use_llvm = true;
@@ -166,6 +185,8 @@ pub fn build(b: *std.Build) void {
     pack_initrd.addFileArg(vfs_client_exe.getEmittedBin());
     pack_initrd.addArg("--exec");
     pack_initrd.addFileArg(shell_exe.getEmittedBin());
+    pack_initrd.addArg("--exec");
+    pack_initrd.addFileArg(syscall_fault_test_exe.getEmittedBin());
     pack_initrd.step.dependOn(&ramfs_server_exe.step);
     pack_initrd.step.dependOn(&vfs_client_exe.step);
     pack_initrd.step.dependOn(&shell_exe.step);
@@ -185,6 +206,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(ramfs_server_exe);
     b.installArtifact(vfs_client_exe);
     b.installArtifact(shell_exe);
+    b.installArtifact(syscall_fault_test_exe);
     const install_kernel = b.addInstallFile(kernel_exe.getEmittedBin(), b.fmt("{s}/efi/{s}", .{ out_dir_name, kernel_exe.name }));
 
     install_kernel.step.dependOn(&kernel_exe.step);

@@ -192,6 +192,10 @@ pub export fn kernel_main(boot_info: *shared.boot.BootInfo) callconv(.c) noretur
         log.err("shell bootstrap failed: {any}", .{err});
         @panic("shell bootstrap failed");
     };
+    _ = initrd_boot.bootstrapSyscallTest(allocator) catch |err| {
+        log.err("syscall test bootstrap failed: {any}", .{err});
+        @panic("syscall test bootstrap failed");
+    };
 
     arch.timer.calibrate();
     smp_service.bootAps(allocator) catch |err| {
