@@ -169,6 +169,50 @@ pub fn destroy(tok: EndpointToken, caller_pid: process.ProcessId) error{ Invalid
     log.debug("IPC endpoint destroyed: id={} gen={}", .{ tok.id, tok.gen });
 }
 
+/// Destroy every endpoint currently owned by `pid`.
+/// Safe to call during process teardown; tolerates concurrent endpoint destroy.
+pub fn destroyOwnedBy(pid: process.ProcessId) void {
+    const alloc = allocator orelse return;
+    var count: usize = 0;
+    lock.acquire();
+    for (1..MAX_ENDPOINTS) |i| {
+        const slot = &slots[i];
+        if (slot.ep != null and slot.owner == pid) count += 1;
+    }
+    lock.release();
+
+    if (count == 0) return;
+
+    var toks = std.ArrayListUnmanaged(EndpointToken){};
+    defer toks.deinit(alloc);
+    toks.ensureTotalCapacity(alloc, count) catch return;
+
+    lock.acquire();
+    for (1..MAX_ENDPOINTS) |i| {
+        const id: EndpointId = @intCast(i);
+        const slot = &slots[i];
+        if (slot.ep == null) continue;
+        if (slot.owner != pid) continue;
+        toks.appendAssumeCapacity(.{
+            .id = id,
+            .gen = slot.gen,
+        });
+    }
+    lock.release();
+
+    for (toks.items) |tok| {
+        destroy(tok, pid) catch |err| switch (err) {
+            error.InvalidEndpoint => {},
+            error.PermissionDenied => {},
+            error.NotInitialized => return,
+        };
+    }
+
+    log.debug("IPC registry: destroyed {} endpoint(s) for pid={}", .{
+        toks.items.len, pid,
+    });
+}
+
 /// Returns owner only when token exactly matches current live slot
 pub fn ownerOf(tok: EndpointToken) ?process.ProcessId {
     if (!isValidId(tok.id)) return null;

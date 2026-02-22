@@ -11,6 +11,8 @@ const address_space = mm.address_space;
 
 const task_mod = @import("task.zig");
 const ipc_handles = @import("../ipc/handles.zig");
+const ipc_registry = @import("../ipc/registry.zig");
+
 const Task = task_mod.Task;
 const TaskState = task_mod.TaskState;
 const Priority = task_mod.Priority;
@@ -367,7 +369,10 @@ pub fn exit() noreturn {
 
     if (cs.current) |curr| {
         curr.state = .dead;
-        if (curr.pid != 0) ipc_handles.revokeProcess(curr.pid);
+        if (curr.pid != 0) {
+            ipc_registry.destroyOwnedBy(curr.pid);
+            ipc_handles.revokeProcess(curr.pid);
+        }
         log.debug("Task '{s}' (tid={}) exited", .{
             curr.nameSlice(),
             curr.tid,
@@ -519,6 +524,9 @@ pub fn onUserException(vec: u8, err: u64, rip: u64, cr2: u64) void {
     });
 
     curr.state = .dead;
-    if (curr.pid != 0) ipc_handles.revokeProcess(curr.pid);
+    if (curr.pid != 0) {
+        ipc_registry.destroyOwnedBy(curr.pid);
+        ipc_handles.revokeProcess(curr.pid);
+    }
     cs.need_resched = true;
 }
