@@ -30,6 +30,7 @@ pub const BootInitrdError = error{
     ClientLoadFailed,
     InitrdMapFailed,
     EndpointCreateFailed,
+    NoIpcConformance,
 };
 
 var initrd_base: ?[*]const u8 = null;
@@ -152,6 +153,58 @@ pub fn bootstrapTestClient(allocator: std.mem.Allocator) BootInitrdError!*Task {
     };
 
     return proc.main_task;
+}
+
+fn spawnIpcConformanceScenario(
+    allocator: std.mem.Allocator,
+    elf_data: []const u8,
+    scenario_id: u64,
+) BootInitrdError!void {
+    const server = process.createFromElfWithArgs(
+        allocator,
+        "ipc_conf_server",
+        elf_data,
+        task.Priority.NORMAL_DEFAULT,
+        .{ .arg0 = 1, .arg1 = 0, .arg2 = scenario_id },
+    ) catch return BootInitrdError.ClientLoadFailed;
+
+    const caller = process.createFromElfWithArgs(
+        allocator,
+        "ipc_conf_caller",
+        elf_data,
+        task.Priority.NORMAL_DEFAULT,
+        .{ .arg0 = 2, .arg1 = 0, .arg2 = scenario_id },
+    ) catch return BootInitrdError.ClientLoadFailed;
+
+    const tok = ipc.createEndpoint(server.pid) catch return BootInitrdError.EndpointCreateFailed;
+    errdefer ipc.destroyEndpoint(tok, server.pid) catch {};
+
+    const server_handle = ipc.handles.installEndpoint(server.pid, tok) catch return BootInitrdError.EndpointCreateFailed;
+    const caller_handle = ipc.handles.installEndpointInto(caller.pid, tok, ipc.handles.Rights.call) catch return BootInitrdError.EndpointCreateFailed;
+
+    server.main_task.user_arg1 = server_handle;
+    caller.main_task.user_arg1 = caller_handle;
+
+    log.info(
+        "initrd: started IPC conformance scenario {d} (server pid={d}, caller pid={d})",
+        .{ scenario_id, server.pid, caller.pid },
+    );
+}
+
+pub fn bootstrapIpcConformanceTests(allocator: std.mem.Allocator) BootInitrdError!void {
+    const hdr = archive orelse try validate();
+    const entry = hdr.findFile("ipc_conformance_test") orelse {
+        log.warn("initrd: no ipc conformance test binary found", .{});
+        return BootInitrdError.NoIpcConformance;
+    };
+
+    const elf_data = hdr.fileData(entry);
+    log.info("initrd: loading ipc conformance test '{s}' ({d} bytes)", .{
+        entry.getName(), elf_data.len,
+    });
+
+    try spawnIpcConformanceScenario(allocator, elf_data, 1);
+    try spawnIpcConformanceScenario(allocator, elf_data, 2);
 }
 
 pub fn bootstrapSyscallTest(allocator: std.mem.Allocator) BootInitrdError!*Task {

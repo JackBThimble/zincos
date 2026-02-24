@@ -199,6 +199,10 @@ pub export fn kernel_main(boot_info: *shared.boot.BootInfo) callconv(.c) noretur
             log.err("syscall test bootstrap failed: {any}", .{err});
             @panic("syscall test bootstrap failed");
         };
+        initrd_boot.bootstrapIpcConformanceTests(allocator) catch |err| {
+            log.err("ipc conformance bootstrap failed: {any}", .{err});
+            @panic("ipc conformance bootstrap failed");
+        };
     }
 
     const ipc_created_base = ipc.registry.createdCount();

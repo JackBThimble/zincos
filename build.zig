@@ -82,6 +82,12 @@ pub fn build(b: *std.Build) void {
         .optimize = kernel_optimize,
     });
 
+    const ipc_conformance_test_module = b.addModule("ipc_conformance_test_module", .{
+        .root_source_file = b.path("src/userspace/ipc_conformance_tests.zig"),
+        .target = user_target,
+        .optimize = kernel_optimize,
+    });
+
     const lib_module = b.addModule("lib_module", .{
         .root_source_file = b.path("src/userspace/lib/mod.zig"),
         .target = user_target,
@@ -95,6 +101,7 @@ pub fn build(b: *std.Build) void {
     shared_module.addImport("arch", arch_module);
     lib_module.addImport("shared", shared_module);
     syscall_fault_test_module.addImport("lib", lib_module);
+    ipc_conformance_test_module.addImport("lib", lib_module);
 
     mm_module.addImport("shared", shared_module);
     mm_module.addImport("arch", arch_module);
@@ -148,6 +155,11 @@ pub fn build(b: *std.Build) void {
         .root_module = syscall_fault_test_module,
     });
 
+    const ipc_conformance_test_exe = b.addExecutable(.{
+        .name = "ipc_conformance_test",
+        .root_module = ipc_conformance_test_module,
+    });
+
     kernel_exe.use_llvm = true;
     kernel_exe.use_lld = true;
     kernel_exe.setLinkerScript(
@@ -196,6 +208,9 @@ pub fn build(b: *std.Build) void {
         pack_initrd.addArg("--exec");
         pack_initrd.addFileArg(syscall_fault_test_exe.getEmittedBin());
         pack_initrd.step.dependOn(&syscall_fault_test_exe.step);
+        pack_initrd.addArg("--exec");
+        pack_initrd.addFileArg(ipc_conformance_test_exe.getEmittedBin());
+        pack_initrd.step.dependOn(&ipc_conformance_test_exe.step);
     }
     pack_initrd.step.dependOn(&ramfs_server_exe.step);
     pack_initrd.step.dependOn(&vfs_client_exe.step);
@@ -217,6 +232,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(vfs_client_exe);
     b.installArtifact(shell_exe);
     b.installArtifact(syscall_fault_test_exe);
+    b.installArtifact(ipc_conformance_test_exe);
     const install_kernel = b.addInstallFile(kernel_exe.getEmittedBin(), b.fmt("{s}/efi/{s}", .{ out_dir_name, kernel_exe.name }));
 
     install_kernel.step.dependOn(&kernel_exe.step);
@@ -283,8 +299,8 @@ pub fn build(b: *std.Build) void {
 
     const assert_pass = b.addSystemCommand(&.{
         "sh", "-lc",
-        b.fmt("grep -q 'ALL TESTS PASS' {s} && ! grep -q 'KERNEL PANIC' {s}", .{
-            test_log, test_log,
+        b.fmt("grep -q 'ALL TESTS PASS' {s} && grep -q 'IPC-CONF S1 CALLER PASS' {s} && grep -q 'IPC-CONF S2 CALLER PASS' {s} && ! grep -q 'KERNEL PANIC' {s}", .{
+            test_log, test_log, test_log, test_log,
         }),
     });
     assert_pass.step.dependOn(&run_test.step);
