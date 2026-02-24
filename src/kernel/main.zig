@@ -23,6 +23,7 @@ const shm = @import("shm.zig");
 const syscall_dispatch = @import("syscall_dispatch.zig");
 const initrd_boot = @import("initrd_boot.zig");
 const console = @import("console.zig");
+const tests = @import("tests");
 
 pub const std_options: std.Options = .{
     .page_size_min = 4096,
@@ -131,6 +132,7 @@ pub export fn kernel_main(boot_info: *shared.boot.BootInfo) callconv(.c) noretur
     const allocator = kheap_global.allocator();
     ipc.init(allocator);
     shm.init(allocator);
+    ipc.registry.dumpStats();
     process.init(allocator);
 
     var smp_service: arch.smp.Service = undefined;
@@ -192,10 +194,19 @@ pub export fn kernel_main(boot_info: *shared.boot.BootInfo) callconv(.c) noretur
         log.err("shell bootstrap failed: {any}", .{err});
         @panic("shell bootstrap failed");
     };
-    _ = initrd_boot.bootstrapSyscallTest(allocator) catch |err| {
-        log.err("syscall test bootstrap failed: {any}", .{err});
-        @panic("syscall test bootstrap failed");
-    };
+    if (tests.boot_tests) {
+        _ = initrd_boot.bootstrapSyscallTest(allocator) catch |err| {
+            log.err("syscall test bootstrap failed: {any}", .{err});
+            @panic("syscall test bootstrap failed");
+        };
+    }
+
+    const ipc_created_base = ipc.registry.createdCount();
+    const ipc_destroyed_base = ipc.registry.destroyedCount();
+    const ipc_live_base = ipc.registry.liveCount();
+    log.info("IPC baseline captured: created={} destroyed={} live={}", .{
+        ipc_created_base, ipc_destroyed_base, ipc_live_base,
+    });
 
     arch.timer.calibrate();
     smp_service.bootAps(allocator) catch |err| {
@@ -210,8 +221,13 @@ pub export fn kernel_main(boot_info: *shared.boot.BootInfo) callconv(.c) noretur
 
     const online_count = smp_service.cpu_mgr.online_count.load(.acquire);
     log.info("SMP initialized: {} CPUs discovered, {} online", .{ cpu_count, online_count });
+    ipc.registry.dumpStats();
     const current_cpu_id = smp_service.getCurrentCpuId();
     log.info("Running on CPU {}", .{current_cpu_id});
+
+    if (tests.boot_tests) {
+        ipc.registry.assertNoLeaks(ipc_created_base, ipc_destroyed_base, ipc_live_base);
+    }
 
     log.info("\nKernel initialization complete. Idling.\n", .{});
     while (true) {

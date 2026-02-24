@@ -100,6 +100,7 @@ pub const Endpoint = struct {
     lock: SpinLock = .{},
     send_queue: WaitQueue = .{},
     recv_queue: WaitQueue = .{},
+    reply_wait_queue: WaitQueue = .{},
     pending_notifications: u64 = 0,
     alive: bool = true,
     refcount: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
@@ -147,15 +148,7 @@ pub const Endpoint = struct {
 
         self.alive = false;
 
-        while (self.send_queue.dequeue()) |task| {
-            task.ipc.waiting_for_reply = false;
-            sched.wake(task);
-        }
-
-        while (self.recv_queue.dequeue()) |task| {
-            sched.wake(task);
-        }
-
+        self.wakeAllWaitersOnClose();
         self.lock.release();
         sched_arch.restoreIrq(flags);
     }
@@ -169,7 +162,7 @@ pub const Endpoint = struct {
 
         self.lock.acquire();
 
-        if (!self.alive) {
+        if (!self.isLive()) {
             self.lock.release();
             sched_arch.restoreIrq(flags);
             return error.EndpointClosed;
@@ -198,13 +191,15 @@ pub const Endpoint = struct {
 
         sched.schedule();
         sched_arch.restoreIrq(flags);
+
+        if (!self.isLive()) return error.EndpointClosed;
     }
 
     pub fn notify(self: *Endpoint) error{EndpointClosed}!void {
         const flags = sched_arch.disableIrq();
         self.lock.acquire();
 
-        if (!self.alive) {
+        if (!self.isLive()) {
             self.lock.release();
             sched_arch.restoreIrq(flags);
             return error.EndpointClosed;
@@ -243,7 +238,7 @@ pub const Endpoint = struct {
 
         self.lock.acquire();
 
-        if (!self.alive) {
+        if (!self.isLive()) {
             self.lock.release();
             sched_arch.restoreIrq(flags);
             return error.EndpointClosed;
@@ -270,10 +265,14 @@ pub const Endpoint = struct {
                 .caller = if (sender.ipc.waiting_for_reply) sender else null,
             };
 
+            if (sender.ipc.waiting_for_reply) {
+                self.queueReplyWaiter(sender);
+            }
+
             self.lock.release();
             sched_arch.restoreIrq(flags);
 
-            // If sender did send() (not call), wake it now
+            // If caller used call(), it remains blocked in reply_wait_queue
             if (!sender.ipc.waiting_for_reply) {
                 sched.wake(sender);
             }
@@ -292,6 +291,8 @@ pub const Endpoint = struct {
         sched.schedule();
         sched_arch.restoreIrq(flags);
 
+        if (!self.isLive()) return error.EndpointClosed;
+
         return ReceiveResult{
             .msg = task.ipc.msg,
             .caller = task.ipc.caller,
@@ -308,7 +309,7 @@ pub const Endpoint = struct {
 
         self.lock.acquire();
 
-        if (!self.alive) {
+        if (!self.isLive()) {
             self.lock.release();
             sched_arch.restoreIrq(flags);
             return error.EndpointClosed;
@@ -318,11 +319,13 @@ pub const Endpoint = struct {
         task.ipc.msg = msg.*;
         task.ipc.reply_buf = null;
         task.ipc.waiting_for_reply = true;
+        task.ipc.call_wait_state = .waiting;
 
         // Hot path: receiver already waiting
         if (self.recv_queue.dequeue()) |receiver| {
             receiver.ipc.msg = msg.*;
             receiver.ipc.caller = task;
+            self.queueReplyWaiter(task);
 
             // caller stays blocked (waiting_for_reply = true)
             task.state = .blocked;
@@ -334,8 +337,8 @@ pub const Endpoint = struct {
             sched.schedule();
             sched_arch.restoreIrq(flags);
 
-            // we get here when reply() wakes us.
-            // reply data was written directly to our reply buffer.
+            if (task.ipc.call_wait_state == .endpoint_closed)
+                return error.EndpointClosed;
             return;
         }
 
@@ -348,17 +351,26 @@ pub const Endpoint = struct {
         sched.schedule();
         sched_arch.restoreIrq(flags);
 
-        // reply() already wrote to our reply buffer
+        if (task.ipc.call_wait_state == .endpoint_closed) return error.EndpointClosed;
     }
 
     // =========================================================================
     // reply - non-blocking, sends reply to a caller from call()
     // =========================================================================
     pub fn reply(caller: *Task, msg: *const Message) void {
-        caller.ipc.msg = msg.*;
+        // If the caller is no longer waiting (e.g. endpoint already closed/aborted),
+        // ignore late replies to avoid overwriting terminal error state.
+        if (caller.ipc.call_wait_state != .waiting) {
+            return;
+        }
 
+        detachReplyWaiter(caller);
+        caller.ipc.msg = msg.*;
         caller.ipc.waiting_for_reply = false;
         caller.ipc.reply_buf = null;
+        caller.ipc.call_wait_state = .replied;
+        caller.ipc.wait_endpoint = null;
+        caller.ipc.in_reply_waitq = false;
 
         sched.wake(caller);
     }
@@ -372,16 +384,72 @@ pub const Endpoint = struct {
 
         self.alive = false;
 
-        while (self.send_queue.dequeue()) |task| {
-            task.ipc.waiting_for_reply = false;
-            sched.wake(task);
-        }
-
-        while (self.recv_queue.dequeue()) |task| {
-            sched.wake(task);
-        }
+        self.wakeAllWaitersOnClose();
 
         self.lock.release();
         sched_arch.restoreIrq(flags);
+    }
+
+    pub fn abortCaller(caller: *Task) void {
+        detachReplyWaiter(caller);
+        caller.ipc.waiting_for_reply = false;
+        caller.ipc.reply_buf = null;
+        caller.ipc.call_wait_state = .endpoint_closed;
+        sched.wake(caller);
+    }
+
+    fn isLive(self: *Endpoint) bool {
+        return self.state.load(.acquire) == .live and self.alive;
+    }
+
+    fn queueReplyWaiter(self: *Endpoint, caller: *Task) void {
+        if (caller.ipc.in_reply_waitq) return;
+        caller.ipc.call_wait_state = .waiting;
+        caller.ipc.wait_endpoint = self;
+        caller.ipc.in_reply_waitq = true;
+        self.reply_wait_queue.enqueue(caller);
+    }
+
+    fn unqueueReplyWaiterLocked(self: *Endpoint, caller: *Task) void {
+        if (!caller.ipc.in_reply_waitq) return;
+        self.reply_wait_queue.remove(caller);
+        caller.ipc.in_reply_waitq = false;
+        caller.ipc.wait_endpoint = null;
+    }
+
+    fn detachReplyWaiter(caller: *Task) void {
+        if (!caller.ipc.in_reply_waitq) return;
+        const ep_any = caller.ipc.wait_endpoint orelse {
+            caller.ipc.in_reply_waitq = false;
+            caller.ipc.wait_endpoint = null;
+            return;
+        };
+
+        const ep: *Endpoint = @ptrCast(@alignCast(ep_any));
+        const flags = sched_arch.disableIrq();
+        ep.lock.acquire();
+        ep.unqueueReplyWaiterLocked(caller);
+        ep.lock.release();
+        sched_arch.restoreIrq(flags);
+    }
+
+    fn markCallerClosed(caller: *Task) void {
+        caller.ipc.waiting_for_reply = false;
+        caller.ipc.reply_buf = null;
+        caller.ipc.call_wait_state = .endpoint_closed;
+        caller.ipc.in_reply_waitq = false;
+        caller.ipc.wait_endpoint = null;
+    }
+
+    fn wakeAllWaitersOnClose(self: *Endpoint) void {
+        while (self.send_queue.dequeue()) |task| {
+            if (task.ipc.waiting_for_reply) markCallerClosed(task);
+            sched.wake(task);
+        }
+        while (self.recv_queue.dequeue()) |task| sched.wake(task);
+        while (self.reply_wait_queue.dequeue()) |caller| {
+            markCallerClosed(caller);
+            sched.wake(caller);
+        }
     }
 };

@@ -61,6 +61,10 @@ pub fn reply(caller: *Task, msg: *const Message) void {
     Endpoint.reply(caller, msg);
 }
 
+pub fn abortCaller(caller: *Task) void {
+    Endpoint.abortCaller(caller);
+}
+
 pub fn notify(tok: EndpointToken) !void {
     const ep = registry.acquire(tok) orelse return error.InvalidEndpoint;
     defer registry.release(ep);

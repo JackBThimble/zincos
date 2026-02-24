@@ -1,6 +1,10 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const options = b.addOptions();
+    const boot_tests = b.option(bool, "enable-boot-tests", "Build with syscall tests") orelse false;
+    options.addOption(bool, "boot_tests", boot_tests);
+
     // Optimize options
     const efi_optimize = b.standardOptimizeOption(.{});
     const kernel_optimize =
@@ -104,6 +108,9 @@ pub fn build(b: *std.Build) void {
     ramfs_server_module.addImport("lib", lib_module);
     shell_module.addImport("lib", lib_module);
 
+    // Options
+    kernel_module.addOptions("tests", options);
+
     // Executables
     const efi_exe = b.addExecutable(.{
         .name = "bootx64.efi",
@@ -185,8 +192,11 @@ pub fn build(b: *std.Build) void {
     pack_initrd.addFileArg(vfs_client_exe.getEmittedBin());
     pack_initrd.addArg("--exec");
     pack_initrd.addFileArg(shell_exe.getEmittedBin());
-    pack_initrd.addArg("--exec");
-    pack_initrd.addFileArg(syscall_fault_test_exe.getEmittedBin());
+    if (boot_tests) {
+        pack_initrd.addArg("--exec");
+        pack_initrd.addFileArg(syscall_fault_test_exe.getEmittedBin());
+        pack_initrd.step.dependOn(&syscall_fault_test_exe.step);
+    }
     pack_initrd.step.dependOn(&ramfs_server_exe.step);
     pack_initrd.step.dependOn(&vfs_client_exe.step);
     pack_initrd.step.dependOn(&shell_exe.step);
@@ -235,4 +245,50 @@ pub fn build(b: *std.Build) void {
 
     const run_qemu_cmd = b.step("run", "Run QEMU");
     run_qemu_cmd.dependOn(&qemu_cmd.step);
+
+    // -------------------------------------------------------------------------
+    // Headless QEMU test runner
+    // - requires -Denable-boot-tests=true so syscall_test is present + booted
+    // - fails if ALL TESTS PASS is missing or KERNEL PANIC appears
+    // -------------------------------------------------------------------------
+    const test_log = b.pathJoin(&.{ b.cache_root.path.?, "qemu-test.log" });
+
+    const qemu_test_args = [_][]const u8{
+        "qemu-system-x86_64",
+        "-m",
+        "1G",
+        "-bios",
+        "/usr/share/ovmf/x64/OVMF.4m.fd",
+        "-drive",
+        b.fmt("file=fat:rw:{s}/{s},format=raw", .{ b.install_path, out_dir_name }),
+        "-nographic",
+        "-serial",
+        "mon:stdio",
+        "-no-shutdown",
+        "-smp",
+        "4",
+        "-cpu",
+        "host,+invtsc",
+        "--enable-kvm",
+    };
+
+    const run_test = b.addSystemCommand(&.{
+        "sh", "-lc",
+        b.fmt("timeout 60s {s} > {s} 2>&1; test $? -eq 0 -o $? -eq 124", .{
+            std.mem.join(b.allocator, " ", &qemu_test_args) catch @panic("oom"),
+            test_log,
+        }),
+    });
+    run_test.step.dependOn(b.getInstallStep());
+
+    const assert_pass = b.addSystemCommand(&.{
+        "sh", "-lc",
+        b.fmt("grep -q 'ALL TESTS PASS' {s} && ! grep -q 'KERNEL PANIC' {s}", .{
+            test_log, test_log,
+        }),
+    });
+    assert_pass.step.dependOn(&run_test.step);
+
+    const test_qemu_step = b.step("test-qemu", "Run headless QEMU tests and assert pass markers");
+    test_qemu_step.dependOn(&assert_pass.step);
 }

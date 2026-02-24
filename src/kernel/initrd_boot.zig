@@ -108,7 +108,10 @@ pub fn bootstrap(allocator: std.mem.Allocator) BootInitrdError!*Task {
     };
 
     const endpoint_tok = ipc.createEndpoint(proc.pid) catch return BootInitrdError.EndpointCreateFailed;
-    const vfs_handle = ipc.handles.installEndpoint(proc.pid, endpoint_tok) catch return BootInitrdError.EndpointCreateFailed;
+    const vfs_handle = ipc.handles.installEndpoint(proc.pid, endpoint_tok) catch {
+        _ = ipc.destroyEndpoint(endpoint_tok, proc.pid) catch {};
+        return BootInitrdError.EndpointCreateFailed;
+    };
     bootstrap_vfs_endpoint = endpoint_tok;
 
     const base = initrd_base orelse return BootInitrdError.InitrdNotFound;

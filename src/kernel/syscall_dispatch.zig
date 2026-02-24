@@ -143,10 +143,22 @@ pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
             const pid = process.currentPid();
             const ep = ipc.createEndpoint(pid) catch |err| return retErr(mapCreateError(err));
             const handle = ipc.handles.installEndpoint(pid, ep) catch |err| return switch (err) {
-                error.NotInitialized => retErr(.NODEV),
-                error.OutOfMemory => retErr(.NOMEM),
-                error.OutOfHandles => retErr(.AGAIN),
-                error.PermissionDenied, error.InvalidEndpoint => retErr(.BADF),
+                error.NotInitialized => blk: {
+                    _ = ipc.destroyEndpoint(ep, pid) catch {};
+                    break :blk retErr(.NODEV);
+                },
+                error.OutOfMemory => blk: {
+                    _ = ipc.destroyEndpoint(ep, pid) catch {};
+                    break :blk retErr(.NOMEM);
+                },
+                error.OutOfHandles => blk: {
+                    _ = ipc.destroyEndpoint(ep, pid) catch {};
+                    break :blk retErr(.AGAIN);
+                },
+                error.PermissionDenied, error.InvalidEndpoint => blk: {
+                    _ = ipc.destroyEndpoint(ep, pid) catch {};
+                    break :blk retErr(.BADF);
+                },
             };
             return @as(u64, handle);
         },
@@ -168,21 +180,43 @@ pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
 
             const task = sched.currentTask() orelse return retErr(.INVAL);
             const res = ipc.receive(ep_tok) catch |err| return retErr(mapEndpointError(err));
-            if (!uaccess.copyToUserValue(ipc.Message, task, arg1, &res.msg)) return retErr(.FAULT);
-
-            if (arg2 != 0) {
-                var caller_handle_out: u64 = 0;
-                if (res.caller) |caller| {
-                    const caller_handle = ipc.handles.installCaller(pid, caller) catch |err| return switch (err) {
-                        error.OutOfMemory => retErr(.NOMEM),
-                        error.OutOfHandles => retErr(.AGAIN),
-                        else => retErr(.INVAL),
-                    };
-                    caller_handle_out = caller_handle;
-                }
-                if (!uaccess.copyToUserValue(u64, task, arg2, &caller_handle_out)) return retErr(.FAULT);
+            if (!uaccess.copyToUserValue(ipc.Message, task, arg1, &res.msg)) {
+                if (res.caller) |caller| ipc.abortCaller(caller);
+                return retErr(.FAULT);
             }
 
+            var caller_handle_out: u64 = 0;
+            if (res.caller) |caller| {
+                if (arg2 == 0) {
+                    ipc.abortCaller(caller);
+                    return retErr(.INVAL);
+                }
+
+                const caller_handle = ipc.handles.installCaller(pid, caller) catch |err| return switch (err) {
+                    error.OutOfMemory => blk: {
+                        ipc.abortCaller(caller);
+                        break :blk retErr(.NOMEM);
+                    },
+                    error.OutOfHandles => blk: {
+                        ipc.abortCaller(caller);
+                        break :blk retErr(.AGAIN);
+                    },
+                    else => blk: {
+                        ipc.abortCaller(caller);
+                        break :blk retErr(.INVAL);
+                    },
+                };
+                caller_handle_out = caller_handle;
+                if (!uaccess.copyToUserValue(u64, task, arg2, &caller_handle_out)) {
+                    _ = ipc.handles.consumeCaller(pid, caller_handle);
+                    ipc.abortCaller(caller);
+                    return retErr(.FAULT);
+                }
+            } else if (arg2 != 0) {
+                if (!uaccess.copyToUserValue(u64, task, arg2, &caller_handle_out)) {
+                    return retErr(.FAULT);
+                }
+            }
             return 0;
         },
         @intFromEnum(sc.Number.ipc_call) => {
@@ -204,11 +238,11 @@ pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
         @intFromEnum(sc.Number.ipc_reply) => {
             const caller_handle = parseHandle(arg0) orelse return retErr(.INVAL);
             const pid = process.currentPid();
-            const caller = ipc.handles.consumeCaller(pid, caller_handle) orelse return retErr(.BADF);
             const task = sched.currentTask() orelse return retErr(.INVAL);
 
             var reply: ipc.Message = undefined;
             if (!uaccess.copyFromUserValue(ipc.Message, task, arg1, &reply)) return retErr(.FAULT);
+            const caller = ipc.handles.consumeCaller(pid, caller_handle) orelse return retErr(.BADF);
             ipc.reply(caller, &reply);
             return 0;
         },

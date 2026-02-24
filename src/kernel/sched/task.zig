@@ -67,6 +67,13 @@ pub fn timeSliceForPriority(prio: u5) u32 {
 pub const KERNEL_STACK_SIZE: usize = 32 * 1024; // 32 KiB per task
 
 pub const IpcState = struct {
+    pub const CallWaitState = enum(u2) {
+        none,
+        waiting,
+        replied,
+        endpoint_closed,
+    };
+
     /// Message buffer.
     ///     - send/call: holds outgoing message (read by receiver)
     ///     - receive: holds incoming message (writen by sender)
@@ -85,7 +92,12 @@ pub const IpcState = struct {
     /// Prevents recevie() from waking the sender prematurely - a sender
     /// that used call() stays blocked until reply() explicitly wakes it.
     waiting_for_reply: bool = false,
+
+    call_wait_state: CallWaitState = .none,
+    wait_endpoint: ?*anyopaque = null,
+    in_reply_waitq: bool = false,
 };
+
 pub const Task = struct {
     // --- Identity ---
     tid: u32,

@@ -15,6 +15,7 @@ pub export fn _start() callconv(.c) noreturn {
 fn run() void {
     var passed: usize = 0;
     var failed: usize = 0;
+    var skipped: usize = 0;
 
     check(testSysWriteKernelPtr(), "sys_write kernel ptr", &passed, &failed);
     check(testSysWriteOverflowPtr(), "sys_write overflow ptr", &passed, &failed);
@@ -25,13 +26,30 @@ fn run() void {
     check(testIpcReceiveBadCallerOutPtr(), "ipc_receive bad caller out ptr", &passed, &failed);
     check(testSysWriteValid(), "sys_write valid", &passed, &failed);
     check(testIpcNotifyReceiveValid(), "ipc notify/receive valid", &passed, &failed);
+    check(testIpcDestroyStaleHandle(), "ipc destroy stale handle", &passed, &failed);
+    check(testIpcDestroyDoubleDestroy(), "ipc destroy double", &passed, &failed);
+    check(testIpcCallClosedEndpoint(), "ipc_call closed endpoint", &passed, &failed);
 
-    lib.writeFmt("fault-tests: passed={} failed={}\n", .{ passed, failed });
+    skip("ipc_receive call missing caller out (needs 2 procs)", &skipped);
+    skip("ipc_reply bad ptr keeps caller handle (needs 2 procs)", &skipped);
+
+    lib.writeFmt("fault-tests: passed={} failed={} skipped={}\n", .{
+        passed,
+        failed,
+        skipped,
+    });
     if (failed == 0) {
         lib.writeLit("ALL TESTS PASS\n");
     } else {
         lib.writeLit("TESTS FAILED\n");
     }
+}
+
+fn skip(name: []const u8, skipped: *usize) void {
+    skipped.* += 1;
+    lib.writeLit("SKIP ");
+    writeBytes(name);
+    lib.writeLit("\n");
 }
 
 fn check(ok: bool, name: []const u8, passed: *usize, failed: *usize) void {
@@ -61,6 +79,40 @@ fn isErrno(ret: u64, e: sc.Errno) bool {
     return isErr(ret) and errnoOf(ret) == @intFromEnum(e);
 }
 
+fn testIpcCallClosedEndpoint() bool {
+    return isErr(sysIpcCall(0xffff_ffff, KERNEL_PTR, KERNEL_PTR));
+}
+
+fn sysIpcDestroyEndpoint(ep: u64) u64 {
+    return asm volatile ("syscall"
+        : [ret] "={rax}" (-> u64),
+        : [num] "{rax}" (@intFromEnum(sc.Number.ipc_destroy_endpoint)),
+          [ep] "{rdi}" (ep),
+        : .{ .rcx = true, .r11 = true, .memory = true });
+}
+
+fn testIpcDestroyStaleHandle() bool {
+    const ep = sysIpcCreateEndpoint();
+    if (isErr(ep) or ep == 0) return false;
+
+    const d0 = sysIpcDestroyEndpoint(ep);
+    if (isErr(d0)) return false;
+
+    const s = sysIpcSend(ep, KERNEL_PTR);
+    return isErr(s);
+}
+
+fn testIpcDestroyDoubleDestroy() bool {
+    const ep = sysIpcCreateEndpoint();
+    if (isErr(ep) or ep == 0) return false;
+
+    const d0 = sysIpcDestroyEndpoint(ep);
+    if (isErr(d0)) return false;
+
+    const d1 = sysIpcDestroyEndpoint(ep);
+    return isErr(d1);
+}
+
 fn testSysWriteKernelPtr() bool {
     const ret = sysWriteRaw(1, KERNEL_PTR, 16);
     return isErrno(ret, .FAULT);
@@ -81,6 +133,7 @@ fn testIpcSendBadMsgPtr() bool {
     if (isErr(ep) or ep == 0) return false;
 
     const ret = sysIpcSend(ep, KERNEL_PTR);
+    defer _ = sysIpcDestroyEndpoint(ep);
     return isErrno(ret, .FAULT);
 }
 
@@ -90,6 +143,7 @@ fn testIpcCallBadReqPtr() bool {
 
     var reply: ipc.Message = .{};
     const ret = sysIpcCall(ep, KERNEL_PTR, @intFromPtr(&reply));
+    defer _ = sysIpcDestroyEndpoint(ep);
     return isErrno(ret, .FAULT);
 }
 
@@ -101,6 +155,7 @@ fn testIpcReceiveBadOutMsgPtr() bool {
     if (isErr(sysIpcNotify(ep))) return false;
 
     const ret = sysIpcReceive(ep, KERNEL_PTR, 0);
+    defer _ = sysIpcDestroyEndpoint(ep);
     return isErrno(ret, .FAULT);
 }
 
@@ -113,6 +168,7 @@ fn testIpcReceiveBadCallerOutPtr() bool {
 
     var out_msg: ipc.Message = .{};
     const ret = sysIpcReceive(ep, @intFromPtr(&out_msg), KERNEL_PTR);
+    defer _ = sysIpcDestroyEndpoint(ep);
     return isErrno(ret, .FAULT);
 }
 
@@ -133,6 +189,7 @@ fn testIpcNotifyReceiveValid() bool {
     const ret = sysIpcReceive(ep, @intFromPtr(&out_msg), @intFromPtr(&caller_out));
     if (isErr(ret)) return false;
     if (caller_out != 0) return false; // notify has no caller
+    defer _ = sysIpcDestroyEndpoint(ep);
     return true;
 }
 

@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const shared = @import("shared");
+const atomic = std.atomic;
 const log = shared.log;
 const process = @import("../process/mod.zig");
 const Endpoint = @import("endpoint.zig").Endpoint;
@@ -42,6 +43,14 @@ const Slot = struct {
     gen: u32 = 1,
 };
 
+const Stats = struct {
+    created: atomic.Value(u64) = atomic.Value(u64).init(0),
+    destroyed: atomic.Value(u64) = atomic.Value(u64).init(0),
+    acquire_fail_stale: atomic.Value(u64) = atomic.Value(u64).init(0),
+    acquire_fail_missing: atomic.Value(u64) = atomic.Value(u64).init(0),
+};
+
+var stats: Stats = .{};
 var lock: SpinLock = .{};
 var slots: [MAX_ENDPOINTS]Slot = [_]Slot{.{}} ** MAX_ENDPOINTS;
 var next_id: EndpointId = 1;
@@ -69,6 +78,7 @@ pub fn init(alloc: std.mem.Allocator) void {
 
     allocator = alloc;
     next_id = 1;
+    stats = .{};
 
     log.info("IPC registry initialized: {} endpoint slots", .{MAX_ENDPOINTS});
 }
@@ -104,6 +114,7 @@ pub fn create(owner_pid: process.ProcessId) !EndpointToken {
     next_id = id + 1;
 
     const tok = EndpointToken{ .id = id, .gen = slot.gen };
+    _ = stats.created.fetchAdd(1, .monotonic);
     log.debug("IPC endpoint created: id={} gen={} owner_pid={}", .{ tok.id, tok.gen, owner_pid });
     return tok;
 }
@@ -117,7 +128,14 @@ pub fn acquire(tok: EndpointToken) ?*Endpoint {
     defer lock.release();
 
     const slot = &slots[tok.id];
-    if (!slotMatchesToken(slot, tok)) return null;
+    if (slot.ep == null) {
+        _ = stats.acquire_fail_missing.fetchAdd(1, .monotonic);
+        return null;
+    }
+    if (slot.gen != tok.gen) {
+        _ = stats.acquire_fail_stale.fetchAdd(1, .monotonic);
+        return null;
+    }
 
     const ep = slot.ep.?;
     if (!ep.refGet()) return null;
@@ -163,8 +181,8 @@ pub fn destroy(tok: EndpointToken, caller_pid: process.ProcessId) error{ Invalid
     lock.release();
 
     ep_local.beginClose();
-
     ep_local.refPut();
+    _ = stats.destroyed.fetchAdd(1, .monotonic);
 
     log.debug("IPC endpoint destroyed: id={} gen={}", .{ tok.id, tok.gen });
 }
@@ -211,6 +229,77 @@ pub fn destroyOwnedBy(pid: process.ProcessId) void {
     log.debug("IPC registry: destroyed {} endpoint(s) for pid={}", .{
         toks.items.len, pid,
     });
+}
+
+pub fn liveCount() usize {
+    lock.acquire();
+    defer lock.release();
+
+    var n: usize = 0;
+    for (1..MAX_ENDPOINTS) |i| {
+        if (slots[i].ep != null) n += 1;
+    }
+    return n;
+}
+
+pub fn dumpStats() void {
+    const created = stats.created.load(.monotonic);
+    const destroyed = stats.destroyed.load(.monotonic);
+    const stale = stats.acquire_fail_stale.load(.monotonic);
+    const missing = stats.acquire_fail_missing.load(.monotonic);
+    const live = liveCount();
+
+    log.info(
+        "IPC stats: created={} destroyed={} live={} acquire_fail_stale={} acquire_fail_missing={}",
+        .{ created, destroyed, live, stale, missing },
+    );
+}
+
+pub fn createdCount() u64 {
+    return stats.created.load(.monotonic);
+}
+
+pub fn destroyedCount() u64 {
+    return stats.destroyed.load(.monotonic);
+}
+
+pub fn assertNoLeaks(created_base: u64, destroyed_base: u64, live_base: usize) void {
+    const created = stats.created.load(.monotonic);
+    const destroyed = stats.destroyed.load(.monotonic);
+    const live = liveCount();
+
+    const c: i128 = @as(i128, @intCast(created));
+    const d: i128 = @as(i128, @intCast(destroyed));
+    const cb: i128 = @as(i128, @intCast(created_base));
+    const db: i128 = @as(i128, @intCast(destroyed_base));
+    const lb: i128 = @as(i128, @intCast(live_base));
+    const l: i128 = @as(i128, @intCast(live));
+
+    const created_delta: i128 = c - cb;
+    const destroyed_delta: i128 = d - db;
+    const expected_live: i128 = lb + created_delta - destroyed_delta;
+
+    if (expected_live < 0 or l != expected_live) {
+        log.err(
+            "IPC LEAK CHECK FAILED: created={} destroyed={} created_base={} destroyed_base={} live={} baseline_live={} expected_live={}",
+            .{ created, destroyed, created_base, destroyed_base, live, live_base, expected_live },
+        );
+        @panic("IPC endpoint leak invariant failed");
+    }
+}
+
+pub fn assertNoLeaksTestMode() void {
+    const created = stats.created.load(.monotonic);
+    const destroyed = stats.destroyed.load(.monotonic);
+    const live = liveCount();
+
+    if (created != destroyed or live != 0) {
+        log.err(
+            "IPC LEAK CHECK FAILED: created={} destroyed={} live={}",
+            .{ created, destroyed, live },
+        );
+        @panic("IPC endpoint leak invariant failed");
+    }
 }
 
 /// Returns owner only when token exactly matches current live slot
