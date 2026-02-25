@@ -1,16 +1,31 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    // =========================================================================
+    // Options
+    // =========================================================================
     const options = b.addOptions();
     const boot_tests = b.option(bool, "enable-boot-tests", "Build with syscall tests") orelse false;
+    const ipc_stress_iters = b.option(u64, "ipc-stress-iters", "IPC S3 stress iterations") orelse 100_000;
+    const ipc_destroy_race_iters = b.option(u64, "ipc-destroy-race-iters", "IPC S4 destroy-race iterations") orelse 50_000;
+    const qemu_test_timeout_secs = b.option(u32, "qemu-test-timeout-secs", "Timeout for each QEMU test run") orelse 90;
+    const qemu_test_matrix = b.option(bool, "qemu-test-matrix", "Run SMP matrix (1,2,4,20) in test-qemu") orelse true;
     options.addOption(bool, "boot_tests", boot_tests);
 
+    const ipc_test_options = b.addOptions();
+    ipc_test_options.addOption(u64, "ipc_stress_iters", ipc_stress_iters);
+    ipc_test_options.addOption(u64, "ipc_destroy_race_iters", ipc_destroy_race_iters);
+
+    // =========================================================================
     // Optimize options
+    // =========================================================================
     const efi_optimize = b.standardOptimizeOption(.{});
     const kernel_optimize =
         b.standardOptimizeOption(.{ .preferred_optimize_mode = .Debug });
 
+    // =========================================================================
     // Targets
+    // =========================================================================
     const efi_target = b.resolveTargetQuery(.{
         .os_tag = .uefi,
         .cpu_arch = .x86_64,
@@ -21,7 +36,9 @@ pub fn build(b: *std.Build) void {
     const kernel_target = b.resolveTargetQuery(.{ .os_tag = .freestanding, .ofmt = .elf, .cpu_arch = .x86_64 });
     const user_target = b.resolveTargetQuery(.{ .os_tag = .freestanding, .ofmt = .elf, .cpu_arch = .x86_64 });
 
+    // =========================================================================
     // Modules
+    // =========================================================================
     const efi_module = b.addModule("efi_module", .{
         .code_model = .default,
         .root_source_file = b.path("src/boot/main.zig"),
@@ -94,7 +111,9 @@ pub fn build(b: *std.Build) void {
         .optimize = kernel_optimize,
     });
 
+    // =========================================================================
     // Imports
+    // =========================================================================
     efi_module.addImport("shared", shared_module);
     arch_module.addImport("mm", mm_module);
     arch_module.addImport("shared", shared_module);
@@ -115,10 +134,15 @@ pub fn build(b: *std.Build) void {
     ramfs_server_module.addImport("lib", lib_module);
     shell_module.addImport("lib", lib_module);
 
-    // Options
+    // =========================================================================
+    // Module Options
+    // =========================================================================
     kernel_module.addOptions("tests", options);
+    ipc_conformance_test_module.addOptions("ipc_test_options", ipc_test_options);
 
+    // =========================================================================
     // Executables
+    // =========================================================================
     const efi_exe = b.addExecutable(.{
         .name = "bootx64.efi",
         .root_module = efi_module,
@@ -160,6 +184,9 @@ pub fn build(b: *std.Build) void {
         .root_module = ipc_conformance_test_module,
     });
 
+    // =========================================================================
+    // Kernel Compilation
+    // =========================================================================
     kernel_exe.use_llvm = true;
     kernel_exe.use_lld = true;
     kernel_exe.setLinkerScript(
@@ -184,15 +211,9 @@ pub fn build(b: *std.Build) void {
         b.path("src/arch/x86_64/asm/user_entry.s"),
     );
 
-    const out_dir_name = "img";
-    const install_efi = b.addInstallFile(
-        efi_exe.getEmittedBin(),
-        b.fmt("{s}/efi/boot/{s}", .{ out_dir_name, efi_exe.name }),
-    );
-
-    // -------------------------------------------------------------------------
+    // =========================================================================
     // Pack InitRD -> install into FAT image
-    // -------------------------------------------------------------------------
+    // =========================================================================
     const pack_initrd = b.addRunArtifact(initrd_packer_exe);
     pack_initrd.setCwd(b.path("."));
 
@@ -216,28 +237,48 @@ pub fn build(b: *std.Build) void {
     pack_initrd.step.dependOn(&vfs_client_exe.step);
     pack_initrd.step.dependOn(&shell_exe.step);
 
+    // =========================================================================
+    // Install Files
+    // =========================================================================
+    const out_dir_name = "img";
+
+    const install_efi = b.addInstallFile(
+        efi_exe.getEmittedBin(),
+        b.fmt("{s}/efi/boot/{s}", .{ out_dir_name, efi_exe.name }),
+    );
+
     const install_initrd = b.addInstallFile(
         initrd_img,
         b.fmt("{s}/efi/{s}", .{ out_dir_name, "initrd.img" }),
     );
 
+    const install_kernel = b.addInstallFile(kernel_exe.getEmittedBin(), b.fmt("{s}/efi/{s}", .{ out_dir_name, kernel_exe.name }));
+
+    // =========================================================================
+    // Step Dependencies
+    // =========================================================================
     install_initrd.step.dependOn(&pack_initrd.step);
     b.getInstallStep().dependOn(&install_initrd.step);
 
     install_efi.step.dependOn(&efi_exe.step);
     b.getInstallStep().dependOn(&install_efi.step);
 
+    install_kernel.step.dependOn(&kernel_exe.step);
+    b.getInstallStep().dependOn(&install_kernel.step);
+
+    // =========================================================================
+    // Install Artifacts
+    // =========================================================================
     b.installArtifact(kernel_exe);
     b.installArtifact(ramfs_server_exe);
     b.installArtifact(vfs_client_exe);
     b.installArtifact(shell_exe);
     b.installArtifact(syscall_fault_test_exe);
     b.installArtifact(ipc_conformance_test_exe);
-    const install_kernel = b.addInstallFile(kernel_exe.getEmittedBin(), b.fmt("{s}/efi/{s}", .{ out_dir_name, kernel_exe.name }));
 
-    install_kernel.step.dependOn(&kernel_exe.step);
-    b.getInstallStep().dependOn(&install_kernel.step);
-
+    // =========================================================================
+    // Run steps
+    // =========================================================================
     const qemu_args = [_][]const u8{
         "qemu-system-x86_64",
         "-m",
@@ -265,11 +306,11 @@ pub fn build(b: *std.Build) void {
     // -------------------------------------------------------------------------
     // Headless QEMU test runner
     // - requires -Denable-boot-tests=true so syscall_test is present + booted
-    // - fails if ALL TESTS PASS is missing or KERNEL PANIC appears
+    // - fails if required markers are missing or panic/fail markers appear
     // -------------------------------------------------------------------------
-    const test_log = b.pathJoin(&.{ b.cache_root.path.?, "qemu-test.log" });
+    const quick_log = b.pathJoin(&.{ b.cache_root.path.?, "qemu-test-quick-smp4.log" });
 
-    const qemu_test_args = [_][]const u8{
+    const qemu_test_args_quick = [_][]const u8{
         "qemu-system-x86_64",
         "-m",
         "1G",
@@ -290,21 +331,152 @@ pub fn build(b: *std.Build) void {
 
     const run_test = b.addSystemCommand(&.{
         "sh", "-lc",
-        b.fmt("timeout 60s {s} > {s} 2>&1; test $? -eq 0 -o $? -eq 124", .{
-            std.mem.join(b.allocator, " ", &qemu_test_args) catch @panic("oom"),
-            test_log,
+        b.fmt("timeout {d}s {s} > {s} 2>&1; test $? -eq 0 -o $? -eq 124", .{
+            qemu_test_timeout_secs,
+            std.mem.join(b.allocator, " ", &qemu_test_args_quick) catch @panic("oom"),
+            quick_log,
         }),
     });
     run_test.step.dependOn(b.getInstallStep());
 
-    const assert_pass = b.addSystemCommand(&.{
+    const assert_quick = b.addSystemCommand(&.{
         "sh", "-lc",
-        b.fmt("grep -q 'ALL TESTS PASS' {s} && grep -q 'IPC-CONF S1 CALLER PASS' {s} && grep -q 'IPC-CONF S2 CALLER PASS' {s} && ! grep -q 'KERNEL PANIC' {s}", .{
-            test_log, test_log, test_log, test_log,
+        b.fmt(
+            "grep -q 'ALL TESTS PASS' {s} && " ++
+                "grep -q 'IPC-CONF S1 CALLER PASS' {s} && " ++
+                "grep -q 'IPC-CONF S2 CALLER PASS' {s} && " ++
+                "grep -q 'IPC-CONF S3 CALLER PASS' {s} && " ++
+                "grep -q 'IPC-CONF S4 CALLER PASS' {s} && " ++
+                "! grep -q 'KERNEL PANIC' {s} && " ++
+                "! grep -Eq 'IPC-CONF .* FAIL|TESTS FAILED' {s} || " ++
+                "(echo '--- QUICK LOG TAIL ---'; tail -n 200 {s}; false)",
+            .{
+                quick_log, quick_log, quick_log, quick_log, quick_log, quick_log, quick_log, quick_log,
+            },
+        ),
+    });
+    assert_quick.step.dependOn(&run_test.step);
+
+    const test_qemu_quick_step = b.step("test-qemu-quick", "Run headless QEMU quick test (smp=4)");
+    test_qemu_quick_step.dependOn(&assert_quick.step);
+
+    const test_qemu_matrix_step = b.step("test-qemu-matrix", "Run headless QEMU SMP matrix tests smp=(1, 2, 4, 20)");
+    const matrix_smp = [_]u8{ 1, 2, 4, 20 };
+
+    inline for (matrix_smp) |smp| {
+        const matrix_log = b.pathJoin(&.{ b.cache_root.path.?, b.fmt("qemu-test-matrix-smp{d}.log", .{smp}) });
+        const qemu_test_args_matrix = [_][]const u8{
+            "qemu-system-x86_64",
+            "-m",
+            "1G",
+            "-bios",
+            "/usr/share/ovmf/x64/OVMF.4m.fd",
+            "-drive",
+            b.fmt("file=fat:rw:{s}/{s},format=raw", .{ b.install_path, out_dir_name }),
+            "-nographic",
+            "-serial",
+            "mon:stdio",
+            "-no-shutdown",
+            "-smp",
+            b.fmt("{d}", .{smp}),
+            "-cpu",
+            "host,+invtsc",
+            "--enable-kvm",
+        };
+
+        const run_matrix = b.addSystemCommand(&.{
+            "sh", "-lc",
+            b.fmt("timeout {d}s {s} > {s} 2>&1; test $? -eq 0 -o $? -eq 124", .{
+                qemu_test_timeout_secs,
+                std.mem.join(b.allocator, " ", &qemu_test_args_matrix) catch @panic("oom"),
+                matrix_log,
+            }),
+        });
+        run_matrix.step.dependOn(b.getInstallStep());
+
+        const assert_matrix = b.addSystemCommand(&.{
+            "sh", "-lc",
+            b.fmt(
+                "grep -q 'ALL TESTS PASS' {s} && " ++
+                    "grep -q 'IPC-CONF S1 CALLER PASS' {s} && " ++
+                    "grep -q 'IPC-CONF S2 CALLER PASS' {s} && " ++
+                    "grep -q 'IPC-CONF S3 CALLER PASS' {s} && " ++
+                    "grep -q 'IPC-CONF S4 CALLER PASS' {s} && " ++
+                    "! grep -q 'KERNEL PANIC' {s} && " ++
+                    "! grep -Eq 'IPC-CONF .* FAIL|TESTS FAILED' {s} || " ++
+                    "(echo '--- MATRIX LOG TAIL (smp={d}) ---'; tail -n 200 {s}; false)",
+                .{
+                    matrix_log,
+                    matrix_log,
+                    matrix_log,
+                    matrix_log,
+                    matrix_log,
+                    matrix_log,
+                    matrix_log,
+                    smp,
+                    matrix_log,
+                },
+            ),
+        });
+        assert_matrix.step.dependOn(&run_matrix.step);
+        test_qemu_matrix_step.dependOn(&assert_matrix.step);
+    }
+
+    const soak_log = b.pathJoin(&.{ b.cache_root.path.?, "qemu-test-soak-smp20.log" });
+    const qemu_test_args_soak = [_][]const u8{
+        "qemu-system-x86_64",
+        "-m",
+        "1G",
+        "-bios",
+        "/usr/share/ovmf/x64/OVMF.4m.fd",
+        "-drive",
+        b.fmt("file=fat:rw:{s}/{s},format=raw", .{ b.install_path, out_dir_name }),
+        "-nographic",
+        "-serial",
+        "mon:stdio",
+        "-no-shutdown",
+        "-smp",
+        "20",
+        "-cpu",
+        "host,+invtsc",
+        "--enable-kvm",
+    };
+
+    const run_soak = b.addSystemCommand(&.{
+        "sh", "-lc",
+        b.fmt("timeout {d}s {s} > {s} 2>&1; test $? -eq 0 -o $? -eq 124", .{
+            qemu_test_timeout_secs * 2,
+            std.mem.join(b.allocator, " ", &qemu_test_args_soak) catch @panic("oom"),
+            soak_log,
         }),
     });
-    assert_pass.step.dependOn(&run_test.step);
+    run_soak.step.dependOn(b.getInstallStep());
 
-    const test_qemu_step = b.step("test-qemu", "Run headless QEMU tests and assert pass markers");
-    test_qemu_step.dependOn(&assert_pass.step);
+    const assert_soak = b.addSystemCommand(&.{
+        "sh", "-lc",
+        b.fmt(
+            "grep -q 'ALL TESTS PASS' {s} && " ++
+                "grep -q 'IPC-CONF S1 CALLER PASS' {s} && " ++
+                "grep -q 'IPC-CONF S2 CALLER PASS' {s} && " ++
+                "grep -q 'IPC-CONF S3 CALLER PASS' {s} && " ++
+                "grep -q 'IPC-CONF S4 CALLER PASS' {s} && " ++
+                "! grep -q 'KERNEL PANIC' {s} && " ++
+                "! grep -Eq 'IPC-CONF .* FAIL|TESTS FAILED' {s} || " ++
+                "(echo '--- SOAK LOG TAIL ---'; tail -n 200 {s};j false)",
+            .{
+                soak_log, soak_log, soak_log, soak_log, soak_log, soak_log, soak_log, soak_log,
+            },
+        ),
+    });
+    assert_soak.step.dependOn(&run_soak.step);
+
+    const test_qemu_soak_step = b.step("test-qemu-soak", "Run headless QEMU soak test (smp=20)");
+    test_qemu_soak_step.dependOn(&assert_soak.step);
+
+    const test_qemu_step = b.step("test-qemu", "Run quick + matrix + soak headless QEMU tests");
+    test_qemu_step.dependOn(&assert_quick.step);
+    if (qemu_test_matrix) {
+        test_qemu_step.dependOn(test_qemu_matrix_step);
+    }
+    test_qemu_step.dependOn(&assert_soak.step);
 }

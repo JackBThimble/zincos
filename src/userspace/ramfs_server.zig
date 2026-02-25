@@ -50,6 +50,7 @@ fn handleRequest(req_msg: *const IpcMessage) IpcMessage {
         @intFromEnum(vfs.VfsOp.read) => handleRead(req_msg),
         @intFromEnum(vfs.VfsOp.close) => handleClose(req_msg),
         @intFromEnum(vfs.VfsOp.stat) => handleStat(req_msg),
+        @intFromEnum(vfs.VfsOp.readdir) => handleReaddir(req_msg),
         else => makeErrorReply(vfs.VfsError.invalid_op),
     };
 }
@@ -122,6 +123,38 @@ fn handleStat(req_msg: *const IpcMessage) IpcMessage {
 
     var reply = IpcMessage.init(@intFromEnum(vfs.VfsOp.stat_data), PAYLOAD_WORDS);
     lib.payloadOf(&reply).* = vfs.serialize(vfs.StatResponse, &resp);
+    return reply;
+}
+
+fn handleReaddir(req_msg: *const ipc.Message) ipc.Message {
+    const req = vfs.deserialize(vfs.ReaddirRequest, lib.payloadOfConst(req_msg));
+    if (req.fd != 0) return makeErrorReply(vfs.VfsError.not_a_directory);
+
+    const hdr = g_archive orelse return makeErrorReply(vfs.VfsError.io_error);
+    if (req.start_index >= @as(u32, hdr.file_count)) {
+        return ipc.Message.init(@intFromEnum(vfs.VfsOp.readdir_end), 0);
+    }
+
+    const entry_index: u16 = std.math.cast(u16, req.start_index) orelse {
+        return makeErrorReply(vfs.VfsError.invalid_op);
+    };
+    const entry = hdr.getEntry(entry_index) orelse {
+        return ipc.Message.init(@intFromEnum(vfs.VfsOp.readdir_end), 0);
+    };
+
+    var resp = vfs.ReaddirResponse{
+        .index = req.start_index,
+        .file_size = std.math.cast(u32, entry.data_size) orelse std.math.maxInt(u32),
+        .name = [_]u8{0} ** 40,
+    };
+
+    const src_name = entry.getName();
+    const n = @min(src_name.len, resp.name.len - 1);
+    @memcpy(resp.name[0..n], src_name[0..n]);
+    resp.name[n] = 0;
+
+    var reply = ipc.Message.init(@intFromEnum(vfs.VfsOp.readdir_entry), PAYLOAD_WORDS);
+    lib.payloadOf(&reply).* = vfs.serialize(vfs.ReaddirResponse, &resp);
     return reply;
 }
 

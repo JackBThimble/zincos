@@ -161,31 +161,27 @@ fn cmdLs(vfs_ep: ?Handle) void {
         return;
     };
 
-    // Open root directory by name "." or ""
-    const opened = lib.openFile(ep, ".") orelse {
-        // TODO: Try listing known files by stat-ing common names
-        lib.writeLit("could not open root directory\n");
-        return;
-    };
+    var index: u32 = 0;
+    var count: u32 = 0;
 
-    const stat = lib.statFile(ep, opened.fd) orelse {
-        _ = lib.closeFile(ep, opened.fd);
-        lib.writeLit("could not stat root\n");
-        return;
-    };
-
-    lib.writeFmt("files: size = {} flags=0x{x}\n", .{ stat.file_size, stat.flags });
-
-    var offset: u64 = 0;
     while (true) {
-        const rd = lib.readChunk(ep, opened.fd, offset, 256) orelse break;
-        if (rd.bytes_read == 0) break;
-        const data = rd.inline_data[0..@intCast(rd.bytes_read)];
-        sc.sysWrite(1, data.ptr, data.len);
-        offset += rd.bytes_read;
+        const next = lib.readdirNext(ep, index) orelse {
+            lib.writeLit("ls failed\n");
+            return;
+        };
+
+        switch (next) {
+            .entry => |entry| {
+                const name = lib.trimCString(entry.name[0..]);
+                lib.writeFmt("{s}\t{}\n", .{ name, entry.file_size });
+                index = entry.index + 1;
+                count += 1;
+            },
+            .end => break,
+        }
     }
 
-    _ = lib.closeFile(ep, opened.fd);
+    if (count == 0) lib.writeLit("(empty)\n");
 }
 
 fn cmdCat(vfs_ep: ?Handle, args: []const u8) void {

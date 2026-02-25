@@ -69,7 +69,7 @@ var cpu_id_fn: ?CpuIdFn = null;
 var tsc_fn: ?TscFn = null;
 
 const MAX_CPUS = types.MAX_CPUS;
-// const LOG_LOCK_SPIN_LIMIT: usize = 1_000_000;
+const LOG_LOCK_SPIN_LIMIT: usize = 200_000;
 var cpu_log_depth: [MAX_CPUS]std.atomic.Value(u32) = [_]std.atomic.Value(u32){std.atomic.Value(u32).init(0)} ** MAX_CPUS;
 
 // ==================================
@@ -82,14 +82,24 @@ const SpinLock = struct {
 
     /// Acquire the lock, disabling interrupts to prevent preemption.
     /// Returns saved RFLAGS so release() can restore interrupt state.
-    pub fn acquire(self: *SpinLock) u64 {
+    /// Returns null if contention exceeds spin budget (caller should drop line).
+    pub fn acquire(self: *SpinLock) ?u64 {
         // Save current flags and disable interrupts before spinning
         const flags = readFlags();
         asm volatile ("cli" ::: .{ .memory = true });
 
+        var spins: usize = 0;
         while (self.locked.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+            spins += 1;
+            if (spins >= LOG_LOCK_SPIN_LIMIT) {
+                if (flags & 0x200 != 0) {
+                    asm volatile ("sti" ::: .{ .memory = true });
+                }
+                return null;
+            }
             std.atomic.spinLoopHint();
         }
+
         return flags;
     }
 
@@ -161,6 +171,7 @@ fn log(comptime level: Level, comptime fmt: []const u8, args: anytype) void {
     // Is backend set??
     const primary = write_fn orelse return;
 
+    var dropped_line: bool = false;
     var buf: [1024]u8 = undefined;
 
     const cpu_id: usize = if (cpu_id_fn) |f| f() else 0;
@@ -179,11 +190,16 @@ fn log(comptime level: Level, comptime fmt: []const u8, args: anytype) void {
     defer leaveLog(cpu_slot);
 
     if (!first_entry) {
-        // Avoid re-entrant recursive logging corruption
         return;
     }
 
-    primary(out_str);
+    if (lock.acquire()) |flags| {
+        defer lock.release(flags);
+        primary(out_str);
+        return;
+    }
+
+    dropped_line = true;
 }
 
 pub fn info(comptime fmt: []const u8, args: anytype) void {
@@ -217,8 +233,9 @@ pub fn raw(bytes: []const u8) void {
         return;
     }
 
-    const flags = lock.acquire();
-    defer lock.release(flags);
-
-    primary(bytes);
+    if (lock.acquire()) |flags| {
+        defer lock.release(flags);
+        primary(bytes);
+        return;
+    }
 }

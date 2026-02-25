@@ -1,6 +1,7 @@
 const lib = @import("lib");
 const sc = lib.syscall;
 const ipc = lib.ipc;
+const cfg = @import("ipc_test_options");
 
 const KERNEL_PTR: u64 = 0xffff_8000_0000_0000;
 
@@ -12,9 +13,9 @@ const SCENARIO_REPLY_FAULT_RETRY: u64 = 2;
 const SCENARIO_STRESS_CALL_REPLY: u64 = 3;
 const SCENARIO_DESTROY_RACE_STRESS: u64 = 4;
 
-const STRESS_ITERS: u64 = 100000;
+const STRESS_ITERS: u64 = cfg.ipc_stress_iters;
 const STRESS_LABEL: u32 = 0x9000;
-const DESTROY_RACE_ITERS: u64 = 50000;
+const DESTROY_RACE_ITERS: u64 = cfg.ipc_destroy_race_iters;
 const DESTROY_AT_ITER: u64 = DESTROY_RACE_ITERS / 2;
 const DESTROY_RACE_LABEL: u32 = 0xa000;
 

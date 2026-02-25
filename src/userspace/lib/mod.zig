@@ -14,6 +14,33 @@ pub const OpenFile = struct {
     entry: *const initrd.FileEntry,
 };
 
+pub const ReaddirResult = union(enum) {
+    entry: vfs.ReaddirResponse,
+    end: void,
+};
+
+pub fn readdirNext(endpoint: Handle, start_index: u32) ?ReaddirResult {
+    const req = vfs.ReaddirRequest{
+        .fd = 0,
+        .start_index = start_index,
+    };
+
+    var msg = ipc.Message.init(@intFromEnum(vfs.VfsOp.readdir), PAYLOAD_WORDS);
+    payloadOf(&msg).* = vfs.serialize(vfs.ReaddirRequest, &req);
+
+    var reply: ipc.Message = .{};
+    const rc = syscall.sysIpcCall(endpoint, &msg, &reply);
+    if (syscall.isSysErr(rc)) return null;
+
+    if (reply.label() == @intFromEnum(vfs.VfsOp.readdir_entry)) {
+        const resp = vfs.deserialize(vfs.ReaddirResponse, payloadOfConst(&reply));
+        return .{ .entry = resp.* };
+    }
+    if (reply.label() == @intFromEnum(vfs.VfsOp.readdir_end)) return .{ .end = {} };
+    if (reply.label() == @intFromEnum(vfs.VfsOp.err)) return null;
+    return null;
+}
+
 pub fn writeLit(comptime s: []const u8) void {
     syscall.sysWrite(1, s.ptr, s.len);
 }
