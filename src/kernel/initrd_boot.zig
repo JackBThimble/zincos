@@ -205,6 +205,8 @@ pub fn bootstrapIpcConformanceTests(allocator: std.mem.Allocator) BootInitrdErro
 
     try spawnIpcConformanceScenario(allocator, elf_data, 1);
     try spawnIpcConformanceScenario(allocator, elf_data, 2);
+    try spawnIpcConformanceScenario(allocator, elf_data, 3);
+    try spawnIpcConformanceScenario(allocator, elf_data, 4);
 }
 
 pub fn bootstrapSyscallTest(allocator: std.mem.Allocator) BootInitrdError!*Task {

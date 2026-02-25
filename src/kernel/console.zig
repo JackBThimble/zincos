@@ -70,6 +70,12 @@ pub fn init(framebuf: *Framebuffer) void {
 // =============================================================================
 
 pub fn combinedWrite(bytes: []const u8) void {
+    lock.acquire();
+    defer lock.release();
+    writeLocked(bytes);
+}
+
+fn writeLocked(bytes: []const u8) void {
     arch.serial.write(bytes);
     writeConsole(bytes);
 }

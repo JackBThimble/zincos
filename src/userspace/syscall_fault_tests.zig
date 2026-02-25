@@ -7,9 +7,12 @@ const OVERFLOW_PTR: u64 = 0xffff_ffff_ffff_fff0;
 
 pub export fn _start() callconv(.c) noreturn {
     run();
-    while (true) {
-        sc.sysSchedYield();
-    }
+    terminateSelf();
+}
+
+fn terminateSelf() noreturn {
+    asm volatile ("ud2");
+    unreachable;
 }
 
 fn run() void {

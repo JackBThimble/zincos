@@ -133,8 +133,7 @@ pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
                 const src_addr = std.math.add(u64, buf_ptr, @as(u64, @intCast(total))) catch return retErr(.FAULT);
                 if (!uaccess.copyFromUser(task, kbuf[0..n], src_addr)) return retErr(.FAULT);
 
-                arch.serial.write(kbuf[0..n]);
-                console.write(kbuf[0..n]);
+                console.combinedWrite(kbuf[0..n]);
                 total += n;
             }
             return @as(u64, @intCast(total));
