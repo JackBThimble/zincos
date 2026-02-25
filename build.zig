@@ -462,7 +462,7 @@ pub fn build(b: *std.Build) void {
                 "grep -q 'IPC-CONF S4 CALLER PASS' {s} && " ++
                 "! grep -q 'KERNEL PANIC' {s} && " ++
                 "! grep -Eq 'IPC-CONF .* FAIL|TESTS FAILED' {s} || " ++
-                "(echo '--- SOAK LOG TAIL ---'; tail -n 200 {s};j false)",
+                "(echo '--- SOAK LOG TAIL ---'; tail -n 200 {s}; false)",
             .{
                 soak_log, soak_log, soak_log, soak_log, soak_log, soak_log, soak_log, soak_log,
             },
