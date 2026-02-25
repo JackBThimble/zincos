@@ -38,6 +38,10 @@ var ansi_param: u32 = 0;
 
 var lock: SpinLock = .{};
 
+const SerialAnsiState = enum { normal, esc, csi };
+var serial_ansi_state: SerialAnsiState = .normal;
+var serial_ansi_param: u32 = 0;
+
 const SpinLock = struct {
     locked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
@@ -76,7 +80,7 @@ pub fn combinedWrite(bytes: []const u8) void {
 }
 
 fn writeLocked(bytes: []const u8) void {
-    arch.serial.write(bytes);
+    writeSerialPlain(bytes);
     writeConsole(bytes);
 }
 
@@ -88,6 +92,53 @@ pub fn write(bytes: []const u8) void {
     lock.acquire();
     defer lock.release();
     writeConsole(bytes);
+}
+
+fn writeSerialPlain(bytes: []const u8) void {
+    var out: [256]u8 = undefined;
+    var n: usize = 0;
+    for (bytes) |c| {
+        switch (serial_ansi_state) {
+            .normal => {
+                if (c == 0x1b) {
+                    serial_ansi_state = .esc;
+                    serial_ansi_param = 0;
+                } else {
+                    out[n] = c;
+                    n += 1;
+                }
+            },
+            .esc => {
+                if (c == '[') {
+                    serial_ansi_state = .csi;
+                    serial_ansi_param = 0;
+                } else {
+                    // drop unknown sequence
+                    serial_ansi_state = .normal;
+                }
+            },
+            .csi => {
+                if (c >= '0' and c <= '9') {
+                    serial_ansi_param = serial_ansi_param * 10 + (c - '0');
+                } else if (c == ';' or c == '?') {
+                    // continue parsing parameter list.
+                } else if (c >= '@' and c <= '~') {
+                    serial_ansi_state = .normal;
+                    serial_ansi_param = 0;
+                } else {
+                    serial_ansi_state = .normal;
+                    serial_ansi_param = 0;
+                }
+            },
+        }
+
+        if (n == out.len) {
+            arch.serial.write(out[0..n]);
+            n = 0;
+        }
+    }
+
+    if (n != 0) arch.serial.write(out[0..n]);
 }
 
 fn writeConsole(bytes: []const u8) void {

@@ -69,7 +69,7 @@ var cpu_id_fn: ?CpuIdFn = null;
 var tsc_fn: ?TscFn = null;
 
 const MAX_CPUS = types.MAX_CPUS;
-const LOG_LOCK_SPIN_LIMIT: usize = 1_000_000;
+// const LOG_LOCK_SPIN_LIMIT: usize = 1_000_000;
 var cpu_log_depth: [MAX_CPUS]std.atomic.Value(u32) = [_]std.atomic.Value(u32){std.atomic.Value(u32).init(0)} ** MAX_CPUS;
 
 // ==================================
@@ -82,24 +82,14 @@ const SpinLock = struct {
 
     /// Acquire the lock, disabling interrupts to prevent preemption.
     /// Returns saved RFLAGS so release() can restore interrupt state.
-    /// Returns null if lock ownership appears stuck.
-    pub fn acquire(self: *SpinLock) ?u64 {
+    pub fn acquire(self: *SpinLock) u64 {
         // Save current flags and disable interrupts before spinning
         const flags = readFlags();
         asm volatile ("cli" ::: .{ .memory = true });
 
-        var spins: usize = 0;
         while (self.locked.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
-            spins += 1;
-            if (spins >= LOG_LOCK_SPIN_LIMIT) {
-                if (flags & 0x200 != 0) {
-                    asm volatile ("sti" ::: .{ .memory = true });
-                }
-                return null;
-            }
             std.atomic.spinLoopHint();
         }
-
         return flags;
     }
 
@@ -189,17 +179,11 @@ fn log(comptime level: Level, comptime fmt: []const u8, args: anytype) void {
     defer leaveLog(cpu_slot);
 
     if (!first_entry) {
-        emergencyWrite(out_str);
+        // Avoid re-entrant recursive logging corruption
         return;
     }
 
-    if (lock.acquire()) |flags| {
-        defer lock.release(flags);
-        primary(out_str);
-        return;
-    }
-
-    emergencyWrite(out_str);
+    primary(out_str);
 }
 
 pub fn info(comptime fmt: []const u8, args: anytype) void {
@@ -229,15 +213,12 @@ pub fn raw(bytes: []const u8) void {
     defer leaveLog(cpu_slot);
 
     if (!first_entry) {
-        emergencyWrite(bytes);
+        // avoid re-entrant recursive logging corruption
         return;
     }
 
-    if (lock.acquire()) |flags| {
-        defer lock.release(flags);
-        primary(bytes);
-        return;
-    }
+    const flags = lock.acquire();
+    defer lock.release(flags);
 
-    emergencyWrite(bytes);
+    primary(bytes);
 }
