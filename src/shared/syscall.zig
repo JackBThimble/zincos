@@ -11,6 +11,7 @@ pub const Number = enum(u64) {
     sys_read = 3,
     sys_write = 4,
     get_pid = 5,
+    sys_exit = 6,
 
     ipc_create_endpoint = 16,
     ipc_send = 17,

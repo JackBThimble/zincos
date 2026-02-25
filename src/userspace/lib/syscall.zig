@@ -76,6 +76,16 @@ pub fn sysSchedYield() void {
         : .{ .rcx = true, .r11 = true, .memory = true });
 }
 
+pub fn sysExit(code: u64) noreturn {
+    _ = asm volatile ("syscall"
+        : [ret] "={rax}" (-> u64),
+        : [num] "{rax}" (@intFromEnum(sc.Number.sys_exit)),
+          [code] "{rdi}" (code),
+        : .{ .rcx = true, .r11 = true, .memory = true });
+
+    unreachable;
+}
+
 pub fn sysVfsGetBootstrapEndpoint() u64 {
     return asm volatile ("syscall"
         : [ret] "={rax}" (-> u64),

@@ -25,11 +25,7 @@ pub export fn _start(role: u64, endpoint: u64, scenario: u64) callconv(.c) noret
         else => lib.writeFmt("IPC-CONF invalid role={}\n", .{role}),
     }
 
-    terminateSelf();
-}
-
-fn terminateSelf() noreturn {
-    asm volatile ("ud2");
+    sc.sysExit(0);
     unreachable;
 }
 

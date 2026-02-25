@@ -81,6 +81,10 @@ pub export fn kernel_syscall_dispatch(ctx: *SyscallContext) callconv(.c) u64 {
             sched.yield();
             return 0;
         },
+        @intFromEnum(sc.Number.sys_exit) => {
+            // _ = arg0; // reserved for future process/task exit status
+            sched.exit();
+        },
         @intFromEnum(sc.Number.get_pid) => return @as(u64, process.currentPid()),
         @intFromEnum(sc.Number.sys_read) => {
             const fd = arg0;

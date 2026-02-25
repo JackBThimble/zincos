@@ -7,11 +7,7 @@ const OVERFLOW_PTR: u64 = 0xffff_ffff_ffff_fff0;
 
 pub export fn _start() callconv(.c) noreturn {
     run();
-    terminateSelf();
-}
-
-fn terminateSelf() noreturn {
-    asm volatile ("ud2");
+    sc.sysExit(0);
     unreachable;
 }
 
@@ -50,22 +46,18 @@ fn run() void {
 
 fn skip(name: []const u8, skipped: *usize) void {
     skipped.* += 1;
-    lib.writeLit("SKIP ");
-    writeBytes(name);
-    lib.writeLit("\n");
+    lib.writeFmt("SKIP {s}\n", .{name});
+    // writeBytes(name);
+    // lib.writeLit("\n");
 }
 
 fn check(ok: bool, name: []const u8, passed: *usize, failed: *usize) void {
     if (ok) {
         passed.* += 1;
-        lib.writeLit("PASS ");
-        writeBytes(name);
-        lib.writeLit("\n");
+        lib.writeFmt("PASS {s}\n", .{name});
     } else {
         failed.* += 1;
-        lib.writeLit("FAIL ");
-        writeBytes(name);
-        lib.writeLit("\n");
+        lib.writeFmt("FAIL {s}\n", .{name});
     }
 }
 
